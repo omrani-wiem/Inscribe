@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FeedbackRecord, QueueItem, AppSettings } from './types';
 
-
+const GEMINI_DEFAULT_MODEL = 'gemini-3.8-flash';
 const DEFAULT_GROQ_MODEL = 'qwen/qwen3.8-27b';
 
 const DEFAULT_SETTINGS: AppSettings = {
@@ -9,7 +9,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   groqApiKey: '',
   groqModel: DEFAULT_GROQ_MODEL,
   geminiApiKey: '',
-  geminiModel: 'gemini-3-flash',
+  geminiModel: GEMINI_DEFAULT_MODEL,
   ocrSpaceApiKey: '',
   mistralApiKey: '',
   defaultDateRange: 'all',
@@ -29,54 +29,63 @@ export function useFeedbackStore() {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   // Load from local storage on mount
   useEffect(() => {
-    // Migration: if version mismatch, clear old data (removes old mock data from localStorage)
-    const storedVersion = parseInt(localStorage.getItem(STORAGE_KEY_VERSION) || '0', 10) || 0;
-    if (storedVersion < CURRENT_VERSION) {
-      localStorage.removeItem(STORAGE_KEY_FEEDBACK);
-      localStorage.setItem(STORAGE_KEY_VERSION, String(CURRENT_VERSION));
-      setFeedbackList([]);
-    } else {
-      const savedFeedback = localStorage.getItem(STORAGE_KEY_FEEDBACK);
-      if (savedFeedback) {
-        try {
-          setFeedbackList(JSON.parse(savedFeedback));
-        } catch (e) {
-          console.error('Error parsing feedback list from localStorage', e);
-          setFeedbackList([]);
-        }
-      } else {
-        // Start with an empty database — no mock data
-        setFeedbackList([]);
-      }
+  // Plus de suppression : on charge toujours les données existantes.
+  // (Le reset de v3 ne servait qu'à purger les anciennes données de démo.)
+  localStorage.setItem(STORAGE_KEY_VERSION, String(CURRENT_VERSION));
+
+  const savedFeedback = localStorage.getItem(STORAGE_KEY_FEEDBACK);
+  if (savedFeedback) {
+    try {
+      setFeedbackList(JSON.parse(savedFeedback));
+    } catch (e) {
+      console.error('Error parsing feedback list from localStorage', e);
     }
+  }
 
     const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
-    if (savedSettings) {
-      try {
-        const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) };
-        setSettings(parsed);
-        // Apply dark mode class immediately on load, before React re-render
-        if (parsed.darkMode) {
-          document.documentElement.classList.add('dark');
-        }
-      } catch (e) {
-        console.error('Error parsing settings from localStorage', e);
-      }
+  if (savedSettings) {
+    try {
+      const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) };
+      setSettings(parsed);
+      if (parsed.darkMode) document.documentElement.classList.add('dark');
+    } catch (e) {
+      console.error('Error parsing settings from localStorage', e);
     }
-  }, []);
+  }
 
-  // Sync to local storage
-  const saveFeedbackList = (newList: FeedbackRecord[]) => {
-    setFeedbackList(newList);
-    localStorage.setItem(STORAGE_KEY_FEEDBACK, JSON.stringify(newList));
+  setIsLoaded(true);
+}, []);
+
+  useEffect(() => {
+  if (!isLoaded) return;
+  try {
+    localStorage.setItem(STORAGE_KEY_FEEDBACK, JSON.stringify(feedbackList));
+  } catch (e) {
+    console.warn('localStorage plein, sauvegarde sans les images', e);
+    try {
+      const light = feedbackList.map(({ scannedImage, ...rest }) => rest);
+      localStorage.setItem(STORAGE_KEY_FEEDBACK, JSON.stringify(light));
+    } catch (e2) {
+      console.error('Sauvegarde impossible', e2);
+    }
+  }
+}, [feedbackList, isLoaded]);
+
+  const saveFeedbackList = (updater: FeedbackRecord[] | ((prev: FeedbackRecord[]) => FeedbackRecord[])) => {
+    setFeedbackList(prev => (typeof updater === 'function' ? updater(prev) : updater));
   };
 
   const saveSettings = (newSettings: AppSettings) => {
     setSettings(newSettings);
-    localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(newSettings));
+    try {
+      localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(newSettings));
+    } catch (e) {
+      console.error('Impossible de sauvegarder les réglages', e);
+    }
   };
 
   const clearAllData = () => {
@@ -189,34 +198,24 @@ export function useFeedbackStore() {
     saveFeedbackList(SAMPLE_TEST_DATA);
   };
 
-  const addFeedback = (item: Omit<FeedbackRecord, 'id' | 'timestamp'>) => {
-    const newRecord: FeedbackRecord = {
-      ...item,
-      id: `FB-${String(feedbackList.length + 1).padStart(3, '0')}-${Math.floor(100 + Math.random() * 900)}`,
-      timestamp: new Date().toISOString()
-    };
-    const updated = [newRecord, ...feedbackList];
-    saveFeedbackList(updated);
-  };
+    const addFeedback = (item: Omit<FeedbackRecord, 'id' | 'timestamp'>): string => {
+    const id = `FB-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const newRecord: FeedbackRecord = { ...item, id, timestamp: new Date().toISOString() };
+    saveFeedbackList(prev => [newRecord, ...prev]);
+    return id;
+}
 
   const updateFeedback = (id: string, updatedFields: Partial<FeedbackRecord>) => {
-    const updated = feedbackList.map(item => {
-      if (item.id === id) {
-        return { ...item, ...updatedFields };
-      }
-      return item;
-    });
-    saveFeedbackList(updated);
+    saveFeedbackList(prev => prev.map(item => (item.id === id ? { ...item, ...updatedFields } : item)));
   };
 
   const deleteFeedback = (id: string) => {
-    const updated = feedbackList.filter(item => item.id !== id);
-    saveFeedbackList(updated);
+    saveFeedbackList(prev => prev.filter(item => item.id !== id));
   };
 
   const deleteMultipleFeedback = (ids: string[]) => {
-    const updated = feedbackList.filter(item => !ids.includes(item.id));
-    saveFeedbackList(updated);
+    const idSet = new Set(ids);
+    saveFeedbackList(prev => prev.filter(item => !idSet.has(item.id)));
   };
 
   // Queue Management
@@ -247,16 +246,21 @@ export function useFeedbackStore() {
     setQueue([]);
   };
 
+  const retryItem = (id: string) =>
+  setQueue(prev => prev.map(q =>
+    q.id === id ? { ...q, status: 'queued', progress: 0, error: undefined } : q
+  ));
+
   // Run the batch analysis
   const analyzeBatch = async () => {
     if (isProcessing || queue.length === 0) return;
     setIsProcessing(true);
 
-    const itemsToProcess = queue.filter(item => item.status === 'queued' || item.status === 'failed');
+    const itemsToProcess = queue.filter(item => item.status === 'queued');
     
     // Update statuses to reading
     setQueue(prev => prev.map(q => 
-      (q.status === 'queued' || q.status === 'failed') ? { ...q, status: 'reading', progress: 10 } : q
+      (q.status === 'queued') ? { ...q, status: 'reading', progress: 10 } : q
     ));
 
     for (const item of itemsToProcess) {
@@ -301,12 +305,15 @@ export function useFeedbackStore() {
           scannedImage
         };
 
+        const feedbackId = addFeedback(finalResult);
+
         setQueue(prev => prev.map(q => q.id === item.id ? { 
           ...q, 
           status: 'done', 
           progress: 100, 
           transcriptionPreview: analysisResult.transcription.substring(0, 60) + '...',
-          result: finalResult
+          result: finalResult,
+          feedbackId
         } : q));
 
         // Add immediately to the feedback database (as per §6 item 4)
@@ -459,7 +466,7 @@ Reply directly to the customer. Do not add subject lines or signatures. Output O
 
   // Auto-analyze: when items are added to the queue, start analysis automatically
   useEffect(() => {
-    const hasQueuedItems = queue.some(item => item.status === 'queued' || item.status === 'failed');
+    const hasQueuedItems = queue.some(item => item.status === 'queued');
     if (hasQueuedItems && !isProcessing) {
       analyzeBatch();
     }
@@ -480,6 +487,7 @@ Reply directly to the customer. Do not add subject lines or signatures. Output O
     addToQueue,
     removeFromQueue,
     clearQueue,
+    retryItem,
     analyzeBatch,
     addTag,
     removeTag,
@@ -625,8 +633,8 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
 // Helper to map UI model names to valid Gemini API model names
 function mapGeminiModel(modelName: string): string {
   const name = modelName ? modelName.trim() : '';
-  if (!name || name === 'gemini-3-flash') {
-    return 'gemini-2.5-flash';
+  if (!name || name === 'gemini-3-flash'  || name === 'gemini-2.5-flash') {
+    return GEMINI_DEFAULT_MODEL;
   }
   return name;
 }
@@ -670,10 +678,11 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
 }`;
 
   const resolvedModel = mapGeminiModel(modelName);
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
     },
     body: JSON.stringify({
       contents: [
@@ -1021,9 +1030,9 @@ async function callGroqTextAPI(prompt: string, apiKey: string, modelName: string
 // ─── Gemini text-only API (no image) ─────────────────────────────────────────
 async function callGeminiTextAPI(prompt: string, apiKey: string, modelName: string): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
   const resolvedModel = mapGeminiModel(modelName);
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { responseMimeType: 'application/json' }
@@ -1063,9 +1072,9 @@ async function callGroqTextAPIRaw(prompt: string, apiKey: string, modelName: str
 
 async function callGeminiTextAPIRaw(prompt: string, apiKey: string, modelName: string): Promise<string> {
   const resolvedModel = mapGeminiModel(modelName);
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent?key=${apiKey}`, {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
   });
   if (!response.ok) throw new Error(`Gemini API error (${response.status})`);

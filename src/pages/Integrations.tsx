@@ -27,6 +27,7 @@ export default function Integrations({
   const [digestStatus, setDigestStatus] = useState("");
   const [importStatus, setImportStatus] = useState("");
   const [formsPaste, setFormsPaste] = useState("");
+  const [formsStatus, setFormsStatus] = useState("");
   const csvImportRef = useRef<HTMLInputElement>(null);
 
   const generateQR = () => {
@@ -66,7 +67,7 @@ export default function Integrations({
         if (!transcription) return;
         addFeedback({
           transcription,
-          sentiment: item.sentiment ?? "neutral",
+          sentiment: ["positive", "neutral", "negative"].includes(item.sentiment) ? item.sentiment : "neutral",
           themes: Array.isArray(item.themes) ? item.themes : [],
           rating: typeof item.rating === "number" ? item.rating : null,
           summary: item.summary || transcription.substring(0, 100),
@@ -77,10 +78,10 @@ export default function Integrations({
         });
         count++;
       });
-      setImportStatus(`Imported ${count} records from JSON. Records marked for review.`);
+      setFormsStatus(`Imported ${count} records from JSON. Records marked for review.`);
       setFormsPaste("");
     } catch {
-      setImportStatus("Invalid JSON. Make sure to paste a valid JSON array.");
+      setFormsStatus("Invalid JSON. Make sure to paste a valid JSON array.");
     }
   };
 
@@ -206,9 +207,9 @@ export default function Integrations({
             Import JSON Records
           </md-filled-button>
         </div>
-        {importStatus && (
-          <p className="md-typescale-body-medium" style={{ color: importStatus.startsWith("Error") || importStatus.startsWith("Invalid") ? "var(--sentiment-negative)" : "var(--sentiment-positive)" }}>
-            {importStatus}
+        {formsStatus && (
+          <p className="md-typescale-body-medium" style={{ color: formsStatus.startsWith("Error") || formsStatus.startsWith("Invalid") ? "var(--sentiment-negative)" : "var(--sentiment-positive)" }}>
+            {formsStatus}
           </p>
         )}
       </div>

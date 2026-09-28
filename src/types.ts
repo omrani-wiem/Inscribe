@@ -36,6 +36,7 @@ export interface QueueItem {
   transcriptionPreview?: string;
   error?: string;
   result?: Omit<FeedbackRecord, 'id' | 'timestamp'>;
+  feedbackId?: string;
 }
 
 export interface EmailJsConfig {

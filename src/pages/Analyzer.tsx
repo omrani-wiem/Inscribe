@@ -3,6 +3,7 @@ import { extractPdfPages } from '../utils/pdfExtractor';
 import { QueueItem, FeedbackRecord } from '../types';
 import '@material/web/button/filled-button.js';
 import '@material/web/button/text-button.js';
+import '@material/web/button/outlined-button.js';
 import '@material/web/progress/linear-progress.js';
 import '@material/web/icon/icon.js';
 import '@material/web/iconbutton/icon-button.js';
@@ -18,6 +19,7 @@ interface AnalyzerProps {
   removeFromQueue: (id: string) => void;
   clearQueue: () => void;
   analyzeBatch: () => void;
+   retryItem: (id: string) => void;
   addFeedback: (item: Omit<FeedbackRecord, 'id' | 'timestamp'>) => void;
   updateFeedback: (id: string, updatedFields: Partial<FeedbackRecord>) => void;
 }
@@ -29,6 +31,7 @@ export default function Analyzer({
   removeFromQueue,
   clearQueue,
   analyzeBatch,
+  retryItem,
   addFeedback,
   updateFeedback
 }: AnalyzerProps) {
@@ -49,28 +52,34 @@ export default function Analyzer({
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  const startCamera = async () => {
-    setIsCameraOpen(true);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (err) {
-      console.error('Failed to open camera:', err);
-      alert('Could not access camera. Please check permissions.');
-      setIsCameraOpen(false);
-    }
-  };
+    const startCamera = () => setIsCameraOpen(true);
+  const stopCamera = () => setIsCameraOpen(false);
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+  // Le flux est attaché seulement quand la balise <video> existe
+  React.useEffect(() => {
+    if (!isCameraOpen) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+      } catch (err) {
+        console.error('Failed to open camera:', err);
+        alert('Could not access camera. Please check permissions.');
+        setIsCameraOpen(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach(t => t.stop());
       streamRef.current = null;
-    }
-    setIsCameraOpen(false);
-  };
+    };
+  }, [isCameraOpen]);
 
   const captureFrame = () => {
     if (videoRef.current) {
@@ -167,28 +176,18 @@ export default function Analyzer({
     setEditThemes(item.result.themes.join(', '));
   };
 
-  const handleSaveReview = () => {
-    if (!selectedReviewItem || !selectedReviewItem.result) return;
-    
-    const themesList = editThemes
-      .split(',')
-      .map(t => t.trim().toLowerCase())
-      .filter(t => t.length > 0);
+    const handleSaveReview = () => {
+    if (!selectedReviewItem?.feedbackId) return;
 
-    const editedResult: Omit<FeedbackRecord, 'id' | 'timestamp'> = {
-      ...selectedReviewItem.result,
+    updateFeedback(selectedReviewItem.feedbackId, {
       transcription: editTranscription,
       sentiment: editSentiment,
       rating: editRating,
-      themes: themesList,
+      themes: editThemes.split(',').map(t => t.trim().toLowerCase()).filter(Boolean),
       needsReview: false,
       reviewedAndEdited: true
-    };
+    });
 
-    // Save to the database
-    addFeedback(editedResult);
-    
-    // Remove from active queue
     removeFromQueue(selectedReviewItem.id);
     setSelectedReviewItem(null);
   };
@@ -518,9 +517,12 @@ export default function Analyzer({
                 )}
 
                 {item.status === 'failed' && (
-                  <span style={{ color: 'var(--sentiment-negative)', fontWeight: 'bold' }}>
-                    {item.error || 'Failed to read card'}
-                  </span>
+                  <>
+                    <span title={item.error} style={{ color: 'var(--sentiment-negative)', fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '70%' }}>
+                      {item.error || 'Failed to read card'}
+                    </span>
+                    <md-text-button onClick={() => retryItem(item.id)} disabled={isProcessing}>Retry</md-text-button>
+                  </>
                 )}
 
                 {item.status === 'queued' && (

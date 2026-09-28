@@ -300,7 +300,7 @@ export default function FeedbackTable({
   setThemeFilter,
   searchQuery,
   setSearchQuery,
-  selectedFeedback,
+  selectedFeedback: selectedSnapshot,
   setSelectedFeedback,
   addTag,
   removeTag,
@@ -336,6 +336,24 @@ export default function FeedbackTable({
   const [editThemes, setEditThemes] = useState('');
     const [highlightMode, setHighlightMode] = useState<'keywords' | 'occlusion'>('keywords');
 
+
+    // Version toujours à jour du record (tags, re-analyse…) au lieu d'un instantané
+  const selectedFeedback = useMemo(
+    () => selectedSnapshot ? (data.find(f => f.id === selectedSnapshot.id) ?? selectedSnapshot) : null,
+    [data, selectedSnapshot]
+  );
+
+  // Remplit les champs d'édition quelle que soit l'origine de l'ouverture (Overview ou tableau)
+  useEffect(() => {
+    if (!selectedSnapshot) return;
+    setEditTranscription(selectedSnapshot.transcription);
+    setEditSentiment(selectedSnapshot.sentiment);
+    setEditRating(selectedSnapshot.rating);
+    setEditThemes(selectedSnapshot.themes.join(', '));
+    setCarouselIndex(processedDataRef.current.findIndex(d => d.id === selectedSnapshot.id));
+  }, [selectedSnapshot?.id]);
+
+  
   // Keyword analysis for the selected feedback (live from transcription)
   const keywordAnalysis = useMemo(() => {
     if (!selectedFeedback) return null;
@@ -487,30 +505,29 @@ export default function FeedbackTable({
   };
 
   // Export to CSV helper
+    const csvCell = (v: unknown) => {
+    let s = String(v ?? '');
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // anti-injection de formules Excel
+    return `"${s.replace(/"/g, '""')}"`;
+  };
+
   const handleExportCSV = (itemsToExport = processedData) => {
     const headers = ['ID', 'Timestamp', 'Sentiment', 'Rating', 'Confidence', 'Themes', 'Summary', 'Transcription', 'Source'];
     const rows = itemsToExport.map(item => [
-      item.id,
-      item.timestamp,
-      item.sentiment,
-      item.rating ?? '',
-      item.confidence,
-      item.themes.join('; '),
-      `"${item.summary.replace(/"/g, '""')}"`,
-      `"${item.transcription.replace(/"/g, '""')}"`,
-      item.source ?? ''
-    ]);
+      item.id, item.timestamp, item.sentiment, item.rating ?? '', item.confidence,
+      item.themes.join('; '), item.summary, item.transcription, item.source ?? ''
+    ].map(csvCell).join(','));
 
-    const csvContent = "data:text/csv;charset=utf-8," 
-      + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `feedback_export_${new Date().toISOString().split('T')[0]}.csv`);
+    // \uFEFF (BOM) : Excel lit correctement les accents et l'arabe
+    const csv = '\uFEFF' + [headers.map(csvCell).join(','), ...rows].join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `feedback_export_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const getSentimentPill = (sentiment: 'positive' | 'neutral' | 'negative') => {

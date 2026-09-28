@@ -26,6 +26,7 @@ export default function App() {
     addToQueue,
     removeFromQueue,
     clearQueue,
+    retryItem,
     analyzeBatch,
     addTag,
     removeTag,
@@ -61,6 +62,11 @@ export default function App() {
   const [themeFilter, setThemeFilter] = useState('');
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackRecord | null>(null);
 
+  // Applique la plage de dates par défaut choisie dans Settings (au chargement et quand elle change)
+  useEffect(() => {
+    setDateRange(settings.defaultDateRange || 'all');
+  }, [settings.defaultDateRange]);
+
   // Compute needsReview count for sidebar badge
   const needsReviewCount = useMemo(() => {
     return feedbackList.filter(item => item.needsReview).length;
@@ -78,7 +84,7 @@ export default function App() {
       case 'analyzer':
         return { title: 'Handwriting OCR Analyzer', breadcrumbs: 'Analyzer' };
       case 'integrations':
-        return { title: 'Integrations & Webhooks', breadcrumbs: 'Integrations' };
+        return { title: 'Integrations & Import', breadcrumbs: 'Integrations' };
       case 'settings':
         return { title: 'Dashboard Settings', breadcrumbs: 'Settings' };
       default:
@@ -163,6 +169,7 @@ export default function App() {
             addToQueue={addToQueue}
             removeFromQueue={removeFromQueue}
             clearQueue={clearQueue}
+            retryItem={retryItem}
             analyzeBatch={analyzeBatch}
             addFeedback={addFeedback}
             updateFeedback={updateFeedback}
