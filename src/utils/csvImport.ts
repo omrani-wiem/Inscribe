@@ -1,42 +1,66 @@
 ﻿import { FeedbackRecord } from '../types';
 
 /**
+ * Parse un CSV complet (et non ligne par ligne) : gère les retours à la ligne
+ * dans les champs entre guillemets, le BOM d'Excel et le séparateur ";" (Excel FR).
+ */
+function parseCSV(input: string): string[][] {
+  const text = input.charCodeAt(0) === 0xFEFF ? input.slice(1) : input;
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? '';
+  const delimiter =
+    (firstLine.match(/;/g)?.length ?? 0) > (firstLine.match(/,/g)?.length ?? 0) ? ';' : ',';
+
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { cur += '"'; i++; }
+        else inQuotes = false;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      row.push(cur); cur = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cur); cur = '';
+      rows.push(row); row = [];
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur !== '' || row.length > 0) { row.push(cur); rows.push(row); }
+
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+
+// Retire l'apostrophe ajoutée à l'export pour neutraliser les formules (='...', +'...')
+const clean = (s: string) => s.trim().replace(/^'(?=[=+\-@])/, '');
+
+/**
  * Parse a CSV string and return an array of partial FeedbackRecord objects.
  * Supports: transcription, sentiment, rating, themes, summary, source, tags columns (case-insensitive headers).
  */
 export function importFromCSV(csvText: string): Omit<FeedbackRecord, 'id' | 'timestamp'>[] {
-  const lines = csvText.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length < 2) return [];
+  const rows = parseCSV(csvText);
+  if (rows.length < 2) return [];
 
-  const parseRow = (line: string): string[] => {
-    const result: string[] = [];
-    let inQuotes = false;
-    let current = '';
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
-        else { inQuotes = !inQuotes; }
-      } else if (ch === ',' && !inQuotes) {
-        result.push(current.trim()); current = '';
-      } else {
-        current += ch;
-      }
-    }
-    result.push(current.trim());
-    return result;
-  };
-
-  const headers = parseRow(lines[0]).map(h => h.toLowerCase().replace(/[^a-z]/g, ''));
+  const headers = rows[0].map(h => h.toLowerCase().replace(/[^a-z]/g, ''));
   const col = (name: string) => headers.indexOf(name);
 
-  return lines.slice(1).map(line => {
-    const cells = parseRow(line);
-    const get = (name: string) => cells[col(name)] ?? '';
+  return rows.slice(1).map(cells => {
+    const get = (name: string) => clean(cells[col(name)] ?? '');
     const transcription = get('transcription') || get('text') || get('feedback') || '';
     if (!transcription) return null;
 
-    const rawSentiment = (get('sentiment') || '').toLowerCase();
+    const rawSentiment = get('sentiment').toLowerCase();
     const sentiment: 'positive' | 'neutral' | 'negative' =
       rawSentiment === 'positive' ? 'positive' :
       rawSentiment === 'negative' ? 'negative' : 'neutral';
@@ -44,8 +68,8 @@ export function importFromCSV(csvText: string): Omit<FeedbackRecord, 'id' | 'tim
     const rawRating = parseFloat(get('rating'));
     const rating = isNaN(rawRating) ? null : Math.min(5, Math.max(1, Math.round(rawRating)));
 
-    const themes = (get('themes') || '').split(/[;,]/).map(t => t.trim().toLowerCase()).filter(Boolean);
-    const tags = (get('tags') || '').split(/[;,]/).map(t => t.trim().toLowerCase()).filter(Boolean);
+    const themes = get('themes').split(/[;,]/).map(t => t.trim().toLowerCase()).filter(Boolean);
+    const tags = get('tags').split(/[;,]/).map(t => t.trim().toLowerCase()).filter(Boolean);
 
     return {
       transcription,
@@ -73,6 +97,6 @@ export async function importFromCSVFile(file: File): Promise<Omit<FeedbackRecord
       } catch (err) { reject(err); }
     };
     reader.onerror = reject;
-    reader.readAsText(file);
+    reader.readAsText(file, 'utf-8');
   });
 }

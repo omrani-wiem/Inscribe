@@ -6,11 +6,12 @@ import '@material/web/icon/icon.js';
 
 interface OverviewProps {
   data: FeedbackRecord[];
+  allData?: FeedbackRecord[];
   setTab: (tab: string) => void;
   setSelectedFeedback: (item: FeedbackRecord | null) => void;
 }
 
-export default function Overview({ data, setTab, setSelectedFeedback }: OverviewProps) {
+export default function Overview({ data, allData, setTab, setSelectedFeedback }: OverviewProps) {
   if (data.length === 0) {
     return (
       <div style={{
@@ -66,8 +67,10 @@ export default function Overview({ data, setTab, setSelectedFeedback }: Overview
   // Accurate only when the date filter is "All time" (see note above).
   const DAY_MS = 24 * 60 * 60 * 1000;
   const now = Date.now();
-  const last30 = data.filter(i => now - new Date(i.timestamp).getTime() <= 30 * DAY_MS);
-  const prev30 = data.filter(i => {
+  // Toujours calculé sur l'ensemble des données, jamais sur "data" (déjà filtré par plage de dates)
+  const trendSource = allData ?? data;
+  const last30 = trendSource.filter(i => now - new Date(i.timestamp).getTime() <= 30 * DAY_MS);
+  const prev30 = trendSource.filter(i => {
     const age = now - new Date(i.timestamp).getTime();
     return age > 30 * DAY_MS && age <= 60 * DAY_MS;
   });

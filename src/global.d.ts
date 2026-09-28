@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import * as React from 'react';
 
 declare global {
@@ -67,5 +69,11 @@ declare global {
       'md-branded-fab': any;
     }
   }
+}
+
+
+declare module '*?url' {
+  const src: string;
+  export default src;
 }
 export {};

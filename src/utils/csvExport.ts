@@ -6,9 +6,10 @@ export function exportToCSV(records: FeedbackRecord[], filename?: string): void 
     'Themes', 'Tags', 'Summary', 'Transcription', 'Source',
     'Language', 'Needs Review', 'Reviewed & Edited'
   ];
-  const escape = (value: unknown): string => {
-    const str = value === null || value === undefined ? '' : String(value);
-    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    const escape = (value: unknown): string => {
+    let str = value === null || value === undefined ? '' : String(value);
+    if (/^[=+\-@\t\r]/.test(str)) str = "'" + str; // anti-injection de formules Excel
+    if (/[",\r\n;]/.test(str) || str !== String(value ?? '')) {
       return `"${str.replace(/"/g, '""')}"`;
     }
     return str;
@@ -28,7 +29,8 @@ export function exportToCSV(records: FeedbackRecord[], filename?: string): void 
     escape(item.needsReview ? 'Yes' : 'No'),
     escape(item.reviewedAndEdited ? 'Yes' : 'No'),
   ]);
-  const csvContent = [headers.map(escape).join(','), ...rows.map(r => r.join(','))].join('\n');
+  // \uFEFF (BOM) : Excel lit correctement les accents et l'arabe
+  const csvContent = '\uFEFF' + [headers.map(escape).join(','), ...rows.map(r => r.join(','))].join('\r\n');
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');

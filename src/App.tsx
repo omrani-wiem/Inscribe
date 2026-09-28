@@ -129,6 +129,7 @@ export default function App() {
         return (
           <Overview
             data={filteredData}
+            allData={feedbackList}
             setTab={setTab}
             setSelectedFeedback={handleOpenFeedbackDetails}
           />

@@ -380,8 +380,8 @@ export function useFeedbackStore() {
           source: 'Mistral AI (Re-analyzed)',
         };
       } else {
-        // Fall back to local keyword analysis
-        result = analyzeTextLocally(item.transcription);
+        // Fall back to local ML analysis
+        result = await analyzeTextLocally(item.transcription);
       }
 
       if (result) {
@@ -814,9 +814,9 @@ async function callMistralOCRAPI(objectUrl: string, apiKey: string): Promise<Omi
     const analyzed = await callMistralChatForAnalysis(transcription, apiKey);
     analyzed.source = 'Mistral OCR Analyzer';
     return analyzed;
-  } catch (chatErr) {
+    } catch (chatErr) {
     console.warn('Mistral Chat analysis failed, falling back to local analysis:', chatErr);
-    const analyzed = analyzeTextLocally(transcription);
+    const analyzed = await analyzeTextLocally(transcription);
     analyzed.source = 'Mistral OCR Analyzer (local analysis)';
     return analyzed;
   }
@@ -893,69 +893,66 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
 
 // ─── Local sentiment / theme analysis ────────────────────────────────────────
 // Runs purely in the browser after OCR transcription — no external API needed.
-function analyzeTextLocally(transcription: string): Omit<FeedbackRecord, 'id' | 'timestamp'> {
+// ─── Local sentiment / theme analysis ────────────────────────────────────────
+// Runs purely in the browser after OCR transcription — no external API needed.
+// Improvements vs the naive version: whole-word matching (not substrings),
+// simple negation handling ("not good", "pas bien"), and FR + EN keywords.
+// ─── Local sentiment analysis ────────────────────────────────────────────────
+// Sentiment is computed by a real ML model (transformers.js, runs in-browser),
+// not a keyword list — it generalizes to words it has never seen literally.
+// Themes stay keyword-based (no lightweight general-purpose model for that yet),
+// so they're a best-effort hint, not a hard guarantee.
+async function analyzeTextLocally(transcription: string): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
   const lower = transcription.toLowerCase();
+  const words = lower.match(/[a-zà-ÿ']+/g) ?? [];
 
-  // Sentiment keyword lists
-  const positiveWords = ['great', 'good', 'excellent', 'love', 'loved', 'amazing', 'fantastic',
-    'perfect', 'best', 'wonderful', 'friendly', 'helpful', 'fast', 'clean', 'nice',
-    'pleasant', 'happy', 'recommend', 'outstanding', 'superb', 'awesome', 'enjoyed',
-    'cozy', 'delicious', 'tasty', 'fresh', 'quick', 'polite'];
-  const negativeWords = ['bad', 'terrible', 'awful', 'horrible', 'worst', 'dirty',
-    'slow', 'rude', 'unfriendly', 'cold', 'expensive', 'overpriced', 'long wait',
-    'waited', 'disappointed', 'poor', 'broken', 'complaint', 'issue', 'problem',
-    'unacceptable', 'disgusting', 'stale', 'wrong', "can't", 'never', 'avoid'];
+  let sentiment: 'positive' | 'neutral' | 'negative' = 'neutral';
+  let sentimentReasoning = '';
+  let modelConfidence = 0;
 
-  let positiveScore = 0;
-  let negativeScore = 0;
-  positiveWords.forEach(w => { if (lower.includes(w)) positiveScore++; });
-  negativeWords.forEach(w => { if (lower.includes(w)) negativeScore++; });
-
-  let sentiment: 'positive' | 'neutral' | 'negative';
-  let sentimentReasoning: string;
-  if (positiveScore > negativeScore + 1) {
-    sentiment = 'positive';
-    sentimentReasoning = `OCR transcription contains ${positiveScore} positive signal(s) and ${negativeScore} negative signal(s), indicating overall satisfaction.`;
-  } else if (negativeScore > positiveScore + 1) {
-    sentiment = 'negative';
-    sentimentReasoning = `OCR transcription contains ${negativeScore} negative signal(s) and ${positiveScore} positive signal(s), indicating overall dissatisfaction.`;
-  } else {
-    sentiment = 'neutral';
-    sentimentReasoning = `OCR transcription has a balanced mix of positive (${positiveScore}) and negative (${negativeScore}) signals, suggesting a neutral experience.`;
+  try {
+    const { classifySentiment } = await import('./utils/localSentiment');
+    const result = await classifySentiment(transcription);
+    sentiment = result.label;
+    modelConfidence = result.score;
+    sentimentReasoning = `Local ML model (RoBERTa sentiment classifier) predicted "${sentiment}" with ${Math.round(result.score * 100)}% confidence.`;
+  } catch (e) {
+    console.error('Local sentiment model failed, defaulting to neutral:', e);
+    sentimentReasoning = 'Local ML model unavailable — defaulted to neutral. Try again or switch provider in Settings.';
   }
 
-  // Theme extraction — match against known topic keywords
+  // Theme extraction — whole-word match against known topic keywords (EN + FR)
   const themeMap: Record<string, string[]> = {
-    'staff friendliness': ['friendly', 'rude', 'polite', 'staff', 'employee', 'team'],
-    'wait time': ['wait', 'waited', 'slow', 'quick', 'fast', 'long'],
-    'food quality': ['food', 'coffee', 'cake', 'croissant', 'cold', 'hot', 'fresh', 'stale', 'delicious', 'tasty'],
-    'cleanliness': ['clean', 'dirty', 'bathroom', 'floor', 'table'],
-    'pricing': ['price', 'expensive', 'cheap', 'overpriced', 'cost', 'dollar', '$'],
-    'ambiance': ['cozy', 'noise', 'loud', 'music', 'atmosphere', 'layout'],
-    'wifi': ['wifi', 'wi-fi', 'internet', 'connection'],
-    'customer service': ['service', 'helped', 'helpful', 'ignored', 'cashier'],
+    'staff friendliness': ['friendly', 'rude', 'polite', 'staff', 'employee', 'team', 'gentil', 'gentille', 'impoli', 'personnel', 'equipe'],
+    'wait time': ['wait', 'waited', 'slow', 'quick', 'fast', 'long', 'attente', 'attendu', 'lent', 'lente', 'rapide'],
+    'food quality': ['food', 'coffee', 'cake', 'croissant', 'cold', 'hot', 'fresh', 'stale', 'delicious', 'tasty', 'nourriture', 'cafe', 'gateau', 'froid', 'chaud', 'frais', 'delicieux'],
+    'cleanliness': ['clean', 'dirty', 'bathroom', 'floor', 'table', 'propre', 'sale', 'toilettes', 'sol'],
+    'pricing': ['price', 'expensive', 'cheap', 'overpriced', 'cost', 'dollar', 'prix', 'cher', 'chere', 'couteux'],
+    'ambiance': ['cozy', 'noise', 'loud', 'music', 'atmosphere', 'layout', 'ambiance', 'bruit', 'musique', 'decoration'],
+    'wifi': ['wifi', 'internet', 'connection', 'connexion'],
+    'customer service': ['service', 'helped', 'helpful', 'ignored', 'cashier', 'aide', 'utile', 'caissier', 'caissiere'],
   };
+  const wordSet = new Set(words);
   const themes: string[] = [];
   for (const [theme, keywords] of Object.entries(themeMap)) {
-    if (keywords.some(k => lower.includes(k))) {
-      themes.push(theme);
-    }
+    if (keywords.some(k => wordSet.has(k))) themes.push(theme);
   }
 
-  // Rating from digits — look for "X/5", "X stars", circled/explicit numbers
+  // Rating from digits — look for "X/5", "X stars", "X etoiles"
   let rating: number | null = null;
-  const ratingMatch = lower.match(/(\d)\s*(?:\/\s*5|stars?|out of 5)/);
+  const ratingMatch = lower.match(/(\d)\s*(?:\/\s*5|stars?|out of 5|etoiles?)/);
   if (ratingMatch) {
     const r = parseInt(ratingMatch[1], 10);
     if (r >= 1 && r <= 5) rating = r;
   }
 
-  // Confidence based on text length
-  const wordCount = transcription.split(/\s+/).filter(Boolean).length;
+  // Confidence blends model confidence and text length (very short text is unreliable either way)
+  const wordCount = words.length;
+  const lengthOk = wordCount >= 6;
   const confidence: 'high' | 'medium' | 'low' =
-    wordCount >= 10 ? 'high' : wordCount >= 4 ? 'medium' : 'low';
+    modelConfidence >= 0.85 && lengthOk ? 'high' :
+    modelConfidence >= 0.6 ? 'medium' : 'low';
 
-  // One-sentence summary
   const firstSentence = transcription.split(/[.!?]/)[0].trim();
   const summary = firstSentence.length > 10
     ? firstSentence.length > 100 ? firstSentence.substring(0, 100) + '…' : firstSentence
@@ -970,11 +967,9 @@ function analyzeTextLocally(transcription: string): Omit<FeedbackRecord, 'id' | 
     summary,
     confidence,
     needsReview: confidence === 'low',
-    source: 'OCR.space (Engine 2)'
+    source: 'OCR.space (Local ML)'
   };
-}
-
-// ─── Text-only sentiment prompt ───────────────────────────────────────────────
+}// ─── Text-only sentiment prompt ───────────────────────────────────────────────
 function buildTextOnlySentimentPrompt(transcription: string): string {
   return `You are analyzing a piece of customer feedback text (already transcribed).
 
