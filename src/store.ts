@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   geminiApiKey: '',
   geminiModel: GEMINI_DEFAULT_MODEL,
   ocrSpaceApiKey: '',
+  preprocessForOcr: true,
   mistralApiKey: '',
   defaultDateRange: 'all',
   darkMode: false,
@@ -278,7 +279,7 @@ export function useFeedbackStore() {
           if (!settings.ocrSpaceApiKey) {
             throw new Error('No OCR.space API key configured. Go to Settings to add your key.');
           }
-          analysisResult = await callOCRSpaceAPI(item.objectUrl, settings.ocrSpaceApiKey);
+          analysisResult = await callOCRSpaceAPI(item.objectUrl, settings.ocrSpaceApiKey, settings.preprocessForOcr ?? true);
         } else if (settings.apiProvider === 'mistral') {
           if (!settings.mistralApiKey) {
             throw new Error('No Mistral API key configured. Go to Settings to add your key.');
@@ -736,8 +737,22 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
 // ─── OCR.space helper ────────────────────────────────────────────────────────
 // Uses OCR Engine 2 (handwriting-optimised) and then runs local sentiment analysis
 // so no second LLM key is required.
-async function callOCRSpaceAPI(objectUrl: string, apiKey: string): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
-  const dataUri = await objectUrlToBase64DataUri(objectUrl);
+async function callOCRSpaceAPI(
+  objectUrl: string,
+  apiKey: string,
+  preprocess: boolean = true
+): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
+  let dataUri = await objectUrlToBase64DataUri(objectUrl);
+
+  if (preprocess) {
+    try {
+      const { preprocessForOCR } = await import('./utils/imagePreprocess');
+      dataUri = await preprocessForOCR(dataUri, { binarize: true });
+    } catch (e) {
+      console.warn('Image preprocessing failed, using original image:', e);
+    }
+  }
+
   // OCR.space expects just the base64 payload without the data URI prefix
   const base64 = dataUri.split(',')[1];
   const mimeMatch = dataUri.match(/^data:([^;]+);base64,/);
@@ -775,7 +790,6 @@ async function callOCRSpaceAPI(objectUrl: string, apiKey: string): Promise<Omit<
 
   return analyzeTextLocally(transcription);
 }
-
 // ─── Mistral OCR helper ──────────────────────────────────────────────────────
 // Uses Mistral OCR for text extraction, then Mistral Chat API for AI-powered
 // sentiment / theme / summary analysis. Falls back to local analysis on error.

@@ -58,5 +58,6 @@ export interface AppSettings {
   darkMode: boolean;
   alertThreshold: number;    // 0–100, negative feedback % that triggers alert banner
   emailJsConfig: EmailJsConfig;
+  preprocessForOcr?: boolean;
 }
 

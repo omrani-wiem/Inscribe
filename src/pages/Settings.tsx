@@ -273,6 +273,19 @@ export default function Settings({
                 💡 <strong>Quick test:</strong> Use the free demo key <code style={{ background: 'var(--md-sys-color-surface-container)', padding: '1px 5px', borderRadius: '4px' }}>helloworld</code> to try it out immediately (limited requests).
               </p>
             </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderRadius: '10px', background: 'var(--md-sys-color-surface-container-low)', border: '1px solid var(--md-sys-color-outline-variant)' }}>
+              <div>
+                <div className="md-typescale-body-medium" style={{ fontWeight: 'bold' }}>Enhance image before OCR</div>
+                <div className="md-typescale-body-small" style={{ color: 'var(--md-sys-color-on-surface-variant)' }}>
+                  Grayscale, contrast stretch and adaptive binarization to help read faint or unevenly lit handwriting. Applied only for OCR.space, not for Gemini/Mistral.
+                </div>
+              </div>
+              <md-switch
+                checked={settings.preprocessForOcr ?? true}
+                onClick={() => saveSettings({ ...settings, preprocessForOcr: !(settings.preprocessForOcr ?? true) })}
+              />
+            </div>
           </div>
         )}
 
