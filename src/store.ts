@@ -1,6 +1,28 @@
 import { useState, useEffect } from 'react';
 import { FeedbackRecord, QueueItem, AppSettings } from './types';
 
+// Réessaie automatiquement les erreurs SERVEUR temporaires (429 rate-limit, 5xx, réseau).
+// Ne réessaie jamais les erreurs définitives (400, 401, 403, 404) : elles ne se
+// résoudront pas en retentant, et gaspilleraient du temps + du quota.
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url, options);
+    } catch (networkErr) {
+      if (attempt === maxRetries) throw networkErr;
+      await new Promise(r => setTimeout(r, 1000 * 2 ** attempt));
+      continue;
+    }
+    const isRetryable = response.status === 429 || response.status >= 500;
+    if (response.ok || !isRetryable || attempt === maxRetries) {
+      return response;
+    }
+    await new Promise(r => setTimeout(r, 1000 * 2 ** attempt)); // 1s, puis 2s
+  }
+  throw new Error('unreachable');
+}
+
 const GEMINI_DEFAULT_MODEL = 'gemini-3.8-flash';
 const DEFAULT_GROQ_MODEL = 'qwen/qwen3.8-27b';
 
@@ -581,7 +603,7 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
   "sentimentReasoning": "string"
 }`;
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const response = await fetchWithRetry('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,
@@ -679,7 +701,7 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
 }`;
 
   const resolvedModel = mapGeminiModel(modelName);
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
+  const response = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
