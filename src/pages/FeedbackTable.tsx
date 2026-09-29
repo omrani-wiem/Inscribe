@@ -11,6 +11,7 @@ import '@material/web/button/filled-button.js';
 import '@material/web/button/outlined-button.js';
 import '@material/web/button/text-button.js';
 import '@material/web/fab/fab.js';
+import type { WordImpact } from '../utils/localSentiment';
 
 /* ── Typewriter Effect Component ── */
 function TypewriterText({ 
@@ -71,206 +72,31 @@ function TypewriterText({
     </span>
   );
 }
+/* ── Word impact highlighting (calculé par le modèle, toutes langues) ── */
+const IMPACT_THRESHOLD = 0.3;
 
-/* ── Sentiment Keyword Detection ── */
-const POSITIVE_KEYWORDS = [
-  'love', 'loved', 'loving', 'excellent', 'great', 'amazing', 'wonderful', 'fantastic',
-  'awesome', 'perfect', 'beautiful', 'nice', 'friendly', 'clean', 'cozy', 'fast',
-  'delicious', 'recommend', 'happy', 'best', 'superb', 'outstanding', 'incredible',
-  'delightful', 'pleasant', 'helpful', 'comfortable', 'impressive', 'convenient',
-  'brilliant', 'lovely', 'super', 'tasty', 'fresh', 'warm', 'kind', 'fabulous',
-  'terrific', 'splendid', 'enjoyed', 'pleased', 'amazed', 'thrilled', 'grateful',
-  'perfectly', 'wonderfully', 'excellently'
-];
-
-const NEGATIVE_KEYWORDS = [
-  'bad', 'terrible', 'awful', 'horrible', 'poor', 'worst', 'dirty', 'slow',
-  'cold', 'expensive', 'overpriced', 'rude', 'broken', 'disgusting', 'hate',
-  'hated', 'disappointed', 'disappointing', 'sucks', 'complaint', 'ugly',
-  'stale', 'tasteless', 'gross', 'rotten', 'sad', 'angry', 'frustrated',
-  'annoyed', 'upset', 'boring', 'bored', 'painful', 'difficult', 'hard',
-  'impossible', 'waste', 'horribly', 'terribly', 'dreadful', 'lousy', 'mediocre',
-  'unpleasant', 'uncomfortable', 'unhelpful', 'unfriendly', 'disaster'
-];
-
-const NEUTRAL_KEYWORDS = [
-  'okay', 'ok', 'average', 'decent', 'fine', 'alright', 'maybe', 'somewhat',
-  'quite', 'fairly', 'normal', 'standard', 'typical', 'acceptable', 'moderate',
-  'sufficient', 'adequate', 'tolerable', 'passable', 'ordinary', 'so-so'
-];
-
-function getWordAttribution(word: string): { weight: number; type: 'positive' | 'negative' | 'neutral' } {
-  const cleanWord = word.toLowerCase().replace(/[^a-z0-9]/g, '');
-  
-  const strongPositive = ['love', 'loved', 'excellent', 'amazing', 'wonderful', 'perfect', 'best', 'superb', 'fantastic', 'outstanding'];
-  const strongNegative = ['terrible', 'awful', 'horrible', 'worst', 'dirty', 'rude', 'broken', 'disaster'];
-
-  if (strongPositive.includes(cleanWord)) {
-    return { weight: 0.95, type: 'positive' };
-  }
-  if (POSITIVE_KEYWORDS.includes(cleanWord)) {
-    return { weight: 0.70, type: 'positive' };
-  }
-  if (strongNegative.includes(cleanWord)) {
-    return { weight: -0.95, type: 'negative' };
-  }
-  if (NEGATIVE_KEYWORDS.includes(cleanWord)) {
-    return { weight: -0.70, type: 'negative' };
-  }
-  if (NEUTRAL_KEYWORDS.includes(cleanWord)) {
-    return { weight: 0.15, type: 'neutral' };
-  }
-  
-  return { weight: 0, type: 'neutral' };
-}
-
-function extractKeywords(text: string): { positive: string[]; negative: string[]; neutral: string[] } {
-  const tokens = text.split(/[\s.,!?;:()""'']+/).filter(Boolean);
-  const found = { positive: new Set<string>(), negative: new Set<string>(), neutral: new Set<string>() };
-  
-  tokens.forEach(token => {
-    const cleanWord = token.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!cleanWord) return;
-    
-    if (POSITIVE_KEYWORDS.includes(cleanWord)) {
-      found.positive.add(cleanWord);
-    } else if (NEGATIVE_KEYWORDS.includes(cleanWord)) {
-      found.negative.add(cleanWord);
-    } else if (NEUTRAL_KEYWORDS.includes(cleanWord)) {
-      found.neutral.add(cleanWord);
-    }
-  });
-  
-  return {
-    positive: Array.from(found.positive),
-    negative: Array.from(found.negative),
-    neutral: Array.from(found.neutral)
-  };
-}
-
-/**
- * Occlusion attribution: for each word, we compute the text's total keyword score
- * WITH and WITHOUT that word, and the difference becomes its displayed weight.
- * This is a real (if simple) computation, not a random or hard-coded value.
- */
-function scoreTokens(tokens: Array<{ token: string; isWord: boolean }>, skipIndex: number): number {
-  let score = 0;
-  tokens.forEach((t, i) => {
-    if (!t.isWord || i === skipIndex) return;
-    const cleanWord = t.token.toLowerCase().replace(/[^a-z0-9]/g, '');
-    score += getWordAttribution(cleanWord).weight;
-  });
-  return score;
-}
-
-function getTranscriptAttribution(
-  text: string
-): Array<{ token: string; isWord: boolean; weight: number }> {
-  const rawTokens = text.split(/(\s+|[.,!?;:()""''])/g).filter(Boolean);
-  const tokens = rawTokens.map(token => ({
-    token,
-    isWord: /^[a-zA-Z0-9'-]+$/.test(token)
-  }));
-
-  const baseScore = scoreTokens(tokens, -1);
-  const maxAbs = Math.max(0.01, ...tokens.map((t, i) => t.isWord ? Math.abs(baseScore - scoreTokens(tokens, i)) : 0));
-
+function renderHighlightedText(tokens: WordImpact[]): React.ReactNode {
   return tokens.map((t, i) => {
-    if (!t.isWord) return { ...t, weight: 0 };
-    const impact = baseScore - scoreTokens(tokens, i);
-    return { ...t, weight: impact / maxAbs }; // normalised to [-1, 1] for display
+    if (!t.isWord || Math.abs(t.weight) < IMPACT_THRESHOLD) return <span key={i}>{t.token}</span>;
+    const positive = t.weight > 0;
+    const rgb = positive ? '46, 125, 50' : '211, 47, 47';
+    const alpha = Math.min(0.85, Math.max(0.15, Math.abs(t.weight) * 0.85));
+    return (
+      <mark
+        key={i}
+        className="kw-highlight"
+        style={{
+          backgroundColor: `rgba(${rgb}, ${alpha})`,
+          color: positive ? 'var(--sentiment-positive-on-container)' : 'var(--sentiment-negative-on-container)',
+          borderBottom: `2px solid rgba(${rgb}, ${Math.abs(t.weight)})`,
+          cursor: 'help',
+        }}
+        title={`Impact : ${t.weight > 0 ? '+' : ''}${t.weight.toFixed(2)} (${positive ? 'pousse vers positif' : 'pousse vers négatif'})`}
+      >
+        {t.token}
+      </mark>
+    );
   });
-}
-function renderHighlightedText(
-  text: string,
-  keywords: ReturnType<typeof extractKeywords>,
-  mode: 'keywords' | 'occlusion'
-): React.ReactNode {
-  if (!text) return null;
-  
-  if (mode === 'occlusion') {
-    const attributions = getTranscriptAttribution(text);
-    return attributions.map((item, index) => {
-      if (!item.isWord) {
-        return <span key={index}>{item.token}</span>;
-      }
-      
-      const weight = item.weight;
-      if (weight > 0.01) {
-        const alpha = Math.max(0.1, weight * 0.85);
-        return (
-          <mark 
-            key={index} 
-            className="kw-highlight" 
-            style={{ 
-              backgroundColor: `rgba(46, 125, 50, ${alpha})`, 
-              color: 'var(--sentiment-positive-on-container)', 
-              borderBottom: `2px solid rgba(46, 125, 50, ${weight})`,
-              cursor: 'help'
-            }}
-            title={`Occlusion impact: +${weight.toFixed(2)} (removing this word lowers the score)`}
-          >
-            {item.token}
-          </mark>
-        );
-      } else if (weight < -0.01) {
-        const alpha = Math.max(0.1, Math.abs(weight) * 0.85);
-        return (
-          <mark 
-            key={index} 
-            className="kw-highlight" 
-            style={{ 
-              backgroundColor: `rgba(211, 47, 47, ${alpha})`, 
-              color: 'var(--sentiment-negative-on-container)', 
-              borderBottom: `2px solid rgba(211, 47, 47, ${Math.abs(weight)})`,
-              cursor: 'help'
-            }}
-            title={`Occlusion impact: ${weight.toFixed(2)} (removing this word raises the score)`}
-          >
-            {item.token}
-          </mark>
-        );
-      } else {
-        return <span key={index}>{item.token}</span>;
-      }
-    });
-  } else {
-    // Keywords Mode
-    const tokens = text.split(/(\s+|[.,!?;:()""''])/g).filter(Boolean);
-    return tokens.map((token, index) => {
-      const isWord = /^[a-zA-Z0-9'-]+$/.test(token);
-      if (!isWord) {
-        return <span key={index}>{token}</span>;
-      }
-      
-      const cleanWord = token.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const isPositive = keywords.positive.some(w => w.toLowerCase() === cleanWord);
-      const isNegative = keywords.negative.some(w => w.toLowerCase() === cleanWord);
-      const isNeutral = keywords.neutral.some(w => w.toLowerCase() === cleanWord);
-      
-      if (isPositive) {
-        return (
-          <mark key={index} className="kw-highlight kw-positive">
-            {token}
-          </mark>
-        );
-      } else if (isNegative) {
-        return (
-          <mark key={index} className="kw-highlight kw-negative">
-            {token}
-          </mark>
-        );
-      } else if (isNeutral) {
-        return (
-          <mark key={index} className="kw-highlight kw-neutral">
-            {token}
-          </mark>
-        );
-      } else {
-        return <span key={index}>{token}</span>;
-      }
-    });
-  }
 }
 
 interface FeedbackTableProps {
@@ -326,6 +152,8 @@ export default function FeedbackTable({
 
   // Tagging & Auto-reply states
   const [newTagText, setNewTagText] = useState('');
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const tagInputRef = useRef<any>(null);
   const [isGeneratingReply, setIsGeneratingReply] = useState(false);
   const [isReAnalyzing, setIsReAnalyzing] = useState(false);
 
@@ -334,7 +162,7 @@ export default function FeedbackTable({
   const [editSentiment, setEditSentiment] = useState<'positive' | 'neutral' | 'negative'>('neutral');
   const [editRating, setEditRating] = useState<number | null>(null);
   const [editThemes, setEditThemes] = useState('');
-    const [highlightMode, setHighlightMode] = useState<'keywords' | 'occlusion'>('keywords');
+
 
 
     // Version toujours à jour du record (tags, re-analyse…) au lieu d'un instantané
@@ -355,10 +183,44 @@ export default function FeedbackTable({
 
   
   // Keyword analysis for the selected feedback (live from transcription)
+  const [wordImpacts, setWordImpacts] = useState<WordImpact[] | null>(null);
+  const [impactsLoading, setImpactsLoading] = useState(false);
+  const [impactsError, setImpactsError] = useState(false);
+
+  useEffect(() => {
+    if (!selectedFeedback) { setWordImpacts(null); return; }
+    const text = editTranscription || selectedFeedback.transcription;
+    let cancelled = false;
+    setImpactsLoading(true);
+    setImpactsError(false);
+    const timer = setTimeout(async () => { // debounce : pas de calcul à chaque frappe
+      try {
+        const { explainSentiment } = await import('../utils/localSentiment');
+        const res = await explainSentiment(text);
+        if (!cancelled) setWordImpacts(res);
+      } catch (e) {
+        console.error('Word impact analysis failed:', e);
+        if (!cancelled) { setWordImpacts(null); setImpactsError(true); }
+      } finally {
+        if (!cancelled) setImpactsLoading(false);
+      }
+    }, 600);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [selectedFeedback?.id, editTranscription]);
+
+  // Même structure qu'avant pour le panneau « Keywords Found », mais calculée par le modèle
   const keywordAnalysis = useMemo(() => {
-    if (!selectedFeedback) return null;
-    return extractKeywords(editTranscription || selectedFeedback.transcription);
-  }, [selectedFeedback, editTranscription]);
+    if (!wordImpacts) return null;
+    const pos = new Set<string>();
+    const neg = new Set<string>();
+    wordImpacts.forEach(w => {
+      if (!w.isWord) return;
+      const word = w.token.toLowerCase();
+      if (w.weight >= IMPACT_THRESHOLD) pos.add(word);
+      else if (w.weight <= -IMPACT_THRESHOLD) neg.add(word);
+    });
+    return { positive: Array.from(pos), negative: Array.from(neg), neutral: [] as string[] };
+  }, [wordImpacts]);
   // Extract all unique themes for filter dropdown
   const allThemes = useMemo(() => {
     const themes = new Set<string>();
@@ -429,6 +291,28 @@ export default function FeedbackTable({
     if (!selectedFeedback) return;
     deleteFeedback(selectedFeedback.id);
     setSelectedFeedback(null);
+  };
+
+  const handleAddTag = () => {
+    if (!selectedFeedback) return;
+    const value = String(tagInputRef.current?.value ?? newTagText).trim();
+    if (!value) return;
+    addTag(selectedFeedback.id, value);
+    setNewTagText('');
+    if (tagInputRef.current) tagInputRef.current.value = '';
+  };
+
+  const handleGenerateReply = async () => {
+    if (!selectedFeedback) return;
+    setIsGeneratingReply(true);
+    setReplyError(null);
+    try {
+      await generateAutoReply(selectedFeedback.id);
+    } catch (err: any) {
+      setReplyError(err?.message || 'Échec de la génération.');
+    } finally {
+      setIsGeneratingReply(false); // ne reste plus bloqué sur "Generating..."
+    }
   };
 
   // Keep a ref to processedData for carousel nav (avoids stale closure)
@@ -994,7 +878,13 @@ export default function FeedbackTable({
 
                       {/* Empty state */}
                       {keywordAnalysis.positive.length === 0 && keywordAnalysis.negative.length === 0 && keywordAnalysis.neutral.length === 0 && (
-                        <div className="fb-kw-empty">No sentiment keywords detected</div>
+                        <div className="fb-kw-empty">
+                          {impactsLoading
+                            ? 'Analyzing words with the model…'
+                            : impactsError
+                              ? 'Model unavailable — could not compute word impact.'
+                              : 'No single word stands out: the model judged the whole sentence.'}
+                        </div>
                       )}
 
                       {/* Keyword-based reasoning */}
@@ -1112,66 +1002,20 @@ export default function FeedbackTable({
 
                 <div className="fb-modal-section-label">Full Transcription</div>
                 
-                {/* Highlighted keyword preview */}
-                {keywordAnalysis && (keywordAnalysis.positive.length > 0 || keywordAnalysis.negative.length > 0 || keywordAnalysis.neutral.length > 0) && (
+                                 {/* Highlighted preview (impact calculé par le modèle) */}
+                {wordImpacts && keywordAnalysis && (keywordAnalysis.positive.length > 0 || keywordAnalysis.negative.length > 0) && (
                   <div className="fb-kw-preview">
-                    <div className="fb-kw-preview-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', marginBottom: '6px' }}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <md-icon style={{ fontSize: '14px', verticalAlign: 'middle' }}>visibility</md-icon>
-                        {' '}Transcript Highlights
-                      </span>
-                      <div style={{ display: 'flex', gap: '4px' }}>
-                        <span 
-                          onClick={() => setHighlightMode('keywords')}
-                          style={{
-                            cursor: 'pointer',
-                            fontSize: '0.7rem',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            backgroundColor: highlightMode === 'keywords' ? 'var(--md-sys-color-secondary-container)' : 'transparent',
-                            color: highlightMode === 'keywords' ? 'var(--md-sys-color-on-secondary-container)' : 'var(--md-sys-color-on-surface-variant)',
-                            fontWeight: 'bold',
-                            border: '1px solid var(--md-sys-color-outline-variant)'
-                          }}
-                        >
-                          Keywords
-                        </span>
-                                                <span 
-                          onClick={() => setHighlightMode('occlusion')}
-                          style={{
-                            cursor: 'pointer',
-                            fontSize: '0.7rem',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            backgroundColor: highlightMode === 'occlusion' ? 'var(--md-sys-color-secondary-container)' : 'transparent',
-                            color: highlightMode === 'occlusion' ? 'var(--md-sys-color-on-secondary-container)' : 'var(--md-sys-color-on-surface-variant)',
-                            fontWeight: 'bold',
-                            border: '1px solid var(--md-sys-color-outline-variant)'
-                          }}
-                        >
-                          Word impact
-                        </span>
-                      </div>
+                    <div className="fb-kw-preview-label">
+                      <md-icon style={{ fontSize: '14px', verticalAlign: 'middle' }}>visibility</md-icon>
+                      {' '}Word impact
                     </div>
-
-                    {highlightMode === 'occlusion' && (
-                      <div style={{ display: 'flex', gap: '12px', fontSize: '0.7rem', padding: '6px 8px', backgroundColor: 'var(--md-sys-color-surface-container-low)', borderRadius: '4px', marginBottom: '8px', borderLeft: '3px solid var(--md-sys-color-primary)', flexWrap: 'wrap' }}>
-                                                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(46, 125, 50, 0.7)' }} /> Word pushes toward positive
-                        </span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(211, 47, 47, 0.7)' }} /> Word pushes toward negative
-                        </span>
-                        <span style={{ color: 'var(--md-sys-color-outline)', fontStyle: 'italic' }}>— computed by removing each word and comparing the score</span>
-                      </div>
-                    )}
-
-                    <div className="fb-kw-preview-text">
-                                            {renderHighlightedText(editTranscription, keywordAnalysis, highlightMode)}
+                    <div style={{ display: 'flex', gap: '12px', fontSize: '0.7rem', marginBottom: '8px', flexWrap: 'wrap' }}>
+                      <span><span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(46, 125, 50, 0.7)' }} /> pushes toward positive</span>
+                      <span><span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: 'rgba(211, 47, 47, 0.7)' }} /> pushes toward negative</span>
                     </div>
+                    <div className="fb-kw-preview-text">{renderHighlightedText(wordImpacts)}</div>
                   </div>
                 )}
-
                 <md-outlined-text-field
                   label="Transcription"
                   type="textarea"
@@ -1209,22 +1053,16 @@ export default function FeedbackTable({
                       </md-icon-button>
                     </span>
                   ))}
-                  <div style={{ display: 'flex', gap: '6px', width: '100%', marginTop: '4px' }}>
+                  <div style={{ display: 'flex', gap: '8px', width: '100%', marginTop: '4px', alignItems: 'center' }}>
                     <md-outlined-text-field
-                      placeholder="Add tag..."
+                      ref={tagInputRef}
+                      label="Add tag"
                       value={newTagText}
                       onInput={(e: any) => setNewTagText(e.target.value)}
-                      style={{ flex: 1, '--md-outlined-text-field-container-shape': '8px', height: '36px' }}
+                      onKeyDown={(e: any) => { if (e.key === 'Enter') { e.preventDefault(); handleAddTag(); } }}
+                      style={{ flex: 1 }}
                     />
-                    <md-filled-button
-                      onClick={() => {
-                        if (newTagText.trim()) {
-                          addTag(selectedFeedback.id, newTagText);
-                          setNewTagText('');
-                        }
-                      }}
-                      style={{ height: '36px' }}
-                    >
+                    <md-filled-button onClick={handleAddTag} style={{ flexShrink: 0 }}>
                       Add
                     </md-filled-button>
                   </div>
@@ -1245,15 +1083,16 @@ export default function FeedbackTable({
                     </span>
                     <md-text-button
                       disabled={isGeneratingReply}
-                      onClick={async () => {
-                        setIsGeneratingReply(true);
-                        await generateAutoReply(selectedFeedback.id);
-                        setIsGeneratingReply(false);
-                      }}
+                      onClick={handleGenerateReply}
                     >
                       {isGeneratingReply ? 'Generating...' : (selectedFeedback.autoReplyDraft ? 'Regenerate' : 'Generate')}
                     </md-text-button>
                   </div>
+                  {replyError && (
+                    <p className="md-typescale-body-small" style={{ margin: '0 0 10px', color: 'var(--sentiment-negative)' }}>
+                      {replyError}
+                    </p>
+                  )}
                   {selectedFeedback.autoReplyDraft ? (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                       <p className="md-typescale-body-small" style={{ margin: 0, fontStyle: 'italic', color: 'var(--md-sys-color-on-surface)' }}>

@@ -8,7 +8,7 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2)
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let response: Response;
     try {
-      response = await fetch(url, options);
+      response = await fetchWithRetry(url, options);
     } catch (networkErr) {
       if (attempt === maxRetries) throw networkErr;
       await new Promise(r => setTimeout(r, 1000 * 2 ** attempt));
@@ -18,7 +18,7 @@ async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2)
     if (response.ok || !isRetryable || attempt === maxRetries) {
       return response;
     }
-    await new Promise(r => setTimeout(r, 1000 * 2 ** attempt)); // 1s, puis 2s
+    await new Promise(r => setTimeout(r, 2000 * 2 ** attempt)); // 2s, 4s, 8s, 16s…
   }
   throw new Error('unreachable');
 }
@@ -102,7 +102,14 @@ export function useFeedbackStore() {
     setFeedbackList(prev => (typeof updater === 'function' ? updater(prev) : updater));
   };
 
-  const saveSettings = (newSettings: AppSettings) => {
+  const saveSettings = (input: AppSettings) => {
+    const newSettings: AppSettings = {
+      ...input,
+      geminiApiKey: (input.geminiApiKey ?? '').trim(),
+      mistralApiKey: (input.mistralApiKey ?? '').trim(),
+      groqApiKey: (input.groqApiKey ?? '').trim(),
+      ocrSpaceApiKey: (input.ocrSpaceApiKey ?? '').trim(),
+    };
     setSettings(newSettings);
     try {
       localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(newSettings));
@@ -339,9 +346,7 @@ export function useFeedbackStore() {
           feedbackId
         } : q));
 
-        // Add immediately to the feedback database (as per §6 item 4)
-        addFeedback(finalResult);
-
+       
       } catch (err: any) {
         console.error('Analysis failed for file: ' + item.fileName, err);
         setQueue(prev => prev.map(q => q.id === item.id ? { 
@@ -360,17 +365,17 @@ export function useFeedbackStore() {
   const addTag = (id: string, tag: string) => {
     const trimmed = tag.trim().toLowerCase();
     if (!trimmed) return;
-    const item = feedbackList.find(f => f.id === id);
-    if (!item) return;
-    const existing = item.tags ?? [];
-    if (existing.includes(trimmed)) return;
-    updateFeedback(id, { tags: [...existing, trimmed] });
+    saveFeedbackList(prev => prev.map(item => {
+      if (item.id !== id) return item;
+      const existing = item.tags ?? [];
+      return existing.includes(trimmed) ? item : { ...item, tags: [...existing, trimmed] };
+    }));
   };
 
   const removeTag = (id: string, tag: string) => {
-    const item = feedbackList.find(f => f.id === id);
-    if (!item) return;
-    updateFeedback(id, { tags: (item.tags ?? []).filter(t => t !== tag) });
+    saveFeedbackList(prev => prev.map(item =>
+      item.id === id ? { ...item, tags: (item.tags ?? []).filter(t => t !== tag) } : item
+    ));
   };
 
   // ── Re-analyze an existing record ───────────────────────────────────────────
@@ -421,35 +426,51 @@ export function useFeedbackStore() {
   };
 
   // ── Generate auto-reply draft ────────────────────────────────────────────────
-  const generateAutoReply = async (id: string): Promise<string | null> => {
+    const generateAutoReply = async (id: string): Promise<string> => {
     const item = feedbackList.find(f => f.id === id);
-    if (!item) return null;
+    if (!item) throw new Error('Feedback introuvable.');
 
-    const prompt = `You are a customer service manager. Write a short, empathetic, professional response to the following customer feedback. Address the key points directly without generic filler. Keep it under 3 sentences.
+    const prompt = `You are a customer service manager. Write a short, empathetic, professional response to the following customer feedback. Address the key points directly without generic filler. Keep it under 3 sentences. Reply in the SAME language as the customer feedback.
 
 Customer feedback: "${item.transcription}"
 Overall sentiment: ${item.sentiment}
 
 Reply directly to the customer. Do not add subject lines or signatures. Output ONLY the reply text.`;
 
-    try {
-      let reply: string | null = null;
-      if (settings.apiProvider === 'gemini' && settings.geminiApiKey) {
-        reply = await callGeminiTextAPIRaw(prompt, settings.geminiApiKey, settings.geminiModel);
-      } else if (settings.apiProvider === 'groq' && settings.groqApiKey) {
-        reply = await callGroqTextAPIRaw(prompt, settings.groqApiKey, settings.groqModel);
-      } else if (settings.apiProvider === 'mistral' && settings.mistralApiKey) {
-        reply = await callMistralTextAPIRaw(prompt, settings.mistralApiKey);
-      }
-
-      if (reply) {
-        updateFeedback(id, { autoReplyDraft: reply });
-        return reply;
-      }
-    } catch (err: any) {
-      console.error('Auto-reply generation failed for', id, err);
+    // On utilise toute clé texte disponible, même si le provider choisi est OCR.space.
+    const candidates: Array<{ name: string; run: () => Promise<string> }> = [];
+    if (settings.geminiApiKey) {
+      candidates.push({ name: 'Gemini', run: () => callGeminiTextAPIRaw(prompt, settings.geminiApiKey, settings.geminiModel) });
     }
-    return null;
+    if (settings.mistralApiKey) {
+      candidates.push({ name: 'Mistral', run: () => callMistralTextAPIRaw(prompt, settings.mistralApiKey) });
+    }
+    if (settings.groqApiKey) {
+      candidates.push({ name: 'Groq', run: () => callGroqTextAPIRaw(prompt, settings.groqApiKey, settings.groqModel) });
+    }
+    // Le provider choisi dans Settings passe en premier
+    candidates.sort((a, b) =>
+      Number(b.name.toLowerCase() === settings.apiProvider) - Number(a.name.toLowerCase() === settings.apiProvider)
+    );
+
+    if (candidates.length === 0) {
+      throw new Error('Aucune clé API texte (Gemini, Mistral ou Groq) configurée dans Settings.');
+    }
+
+    const errors: string[] = [];
+    for (const c of candidates) {
+      try {
+        const reply = await c.run();
+        if (reply) {
+          updateFeedback(id, { autoReplyDraft: reply });
+          return reply;
+        }
+        errors.push(`${c.name} : réponse vide`);
+      } catch (err: any) {
+        errors.push(`${c.name} : ${err.message}`);
+      }
+    }
+    throw new Error(errors.join(' | '));
   };
 
   // ── Duplicate detection (Jaccard similarity on word tokens) ─────────────────
@@ -725,7 +746,7 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
         responseMimeType: "application/json"
       }
     })
-  });
+  }, 4); // 4 retries : jusqu'à ~30 s d'attente en cas de surcharge
 
   if (!response.ok) {
     let errorBody = '';
@@ -784,7 +805,7 @@ async function callOCRSpaceAPI(
   form.append('base64Image', `data:image/${filetype};base64,${base64}`);
   form.append('apikey', apiKey);
   form.append('OCREngine', '2');        // Engine 2 – better for handwriting
-  form.append('language', 'eng');
+  form.append('language', 'fre');
   form.append('isOverlayRequired', 'false');
   form.append('detectOrientation', 'true');
 
@@ -818,7 +839,7 @@ async function callOCRSpaceAPI(
 async function callMistralOCRAPI(objectUrl: string, apiKey: string): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
   const dataUri = await objectUrlToBase64DataUri(objectUrl);
   
-  const response = await fetch('https://api.mistral.ai/v1/ocr', {
+  const response = await fetchWithRetry('https://api.mistral.ai/v1/ocr', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -884,7 +905,7 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
   "sentimentReasoning": "string"
 }`;
 
-  const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+   const response = await fetchWithRetry('https://api.mistral.ai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -951,7 +972,7 @@ async function analyzeTextLocally(transcription: string): Promise<Omit<FeedbackR
     const result = await classifySentiment(transcription);
     sentiment = result.label;
     modelConfidence = result.score;
-    sentimentReasoning = `Local ML model (RoBERTa sentiment classifier) predicted "${sentiment}" with ${Math.round(result.score * 100)}% confidence.`;
+    sentimentReasoning = `Local multilingual model (star-rating classifier) predicted "${sentiment}" with ${Math.round(result.score * 100)}% confidence.`;
   } catch (e) {
     console.error('Local sentiment model failed, defaulting to neutral:', e);
     sentimentReasoning = 'Local ML model unavailable — defaulted to neutral. Try again or switch provider in Settings.';
@@ -1061,14 +1082,14 @@ async function callGroqTextAPI(prompt: string, apiKey: string, modelName: string
 // ─── Gemini text-only API (no image) ─────────────────────────────────────────
 async function callGeminiTextAPI(prompt: string, apiKey: string, modelName: string): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
   const resolvedModel = mapGeminiModel(modelName);
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
+  const response = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { responseMimeType: 'application/json' }
     })
-  });
+  }, 4); // 4 retries : jusqu'à ~30 s d'attente en cas de surcharge
   if (!response.ok) throw new Error(`Gemini text API error (${response.status})`);
   const json = await response.json();
   const text = json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
@@ -1088,7 +1109,7 @@ async function callGeminiTextAPI(prompt: string, apiKey: string, modelName: stri
 
 // ─── Raw text generation (for auto-reply) ────────────────────────────────────
 async function callGroqTextAPIRaw(prompt: string, apiKey: string, modelName: string): Promise<string> {
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const response = await fetchWithRetry('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1103,7 +1124,7 @@ async function callGroqTextAPIRaw(prompt: string, apiKey: string, modelName: str
 
 async function callGeminiTextAPIRaw(prompt: string, apiKey: string, modelName: string): Promise<string> {
   const resolvedModel = mapGeminiModel(modelName);
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
+  const response = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
@@ -1115,7 +1136,7 @@ async function callGeminiTextAPIRaw(prompt: string, apiKey: string, modelName: s
 
 // ─── Mistral raw text generation (for auto-reply) ───────────────────────────
 async function callMistralTextAPIRaw(prompt: string, apiKey: string): Promise<string> {
-  const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+  const response = await fetchWithRetry('https://api.mistral.ai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
