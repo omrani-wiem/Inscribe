@@ -1,4 +1,5 @@
-﻿import React, { useState, useRef } from "react";
+﻿import React, { useState, useRef, useEffect } from "react";
+import { api } from "../api";
 import { FeedbackRecord, EmailJsConfig } from "../types";
 import { generateQRCodeURL, downloadQRCode } from "../utils/qrCode";
 import { importFromCSVFile } from "../utils/csvImport";
@@ -22,7 +23,14 @@ export default function Integrations({
   emailJsConfig,
   saveEmailJsConfig,
 }: IntegrationsProps) {
-  const [qrUrl, setQrUrl] = useState(`${window.location.origin}/submit`);
+   const [qrUrl, setQrUrl] = useState("");
+
+  // Le lien du formulaire propre à ton compte
+  useEffect(() => {
+    api.me()
+      .then(m => setQrUrl(`${window.location.origin}/submit/${m.shopId}`))
+      .catch(() => {});
+  }, []);
   const [qrPreview, setQrPreview] = useState("");
   const [digestStatus, setDigestStatus] = useState("");
   const [importStatus, setImportStatus] = useState("");

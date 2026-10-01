@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { API_URL } from '../api';
 
 export default function SubmitPage() {
@@ -6,12 +6,22 @@ export default function SubmitPage() {
   const [rating, setRating] = useState<number | null>(null);
   const [name, setName] = useState('');
   const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+  const shopId = window.location.pathname.split('/')[2] ?? '';
+  const [shopName, setShopName] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/public/shop/${shopId}`)
+      .then(r => (r.ok ? r.json() : Promise.reject()))
+      .then(d => setShopName(d.name))
+      .catch(() => setInvalid(true));
+  }, []);
 
   const submit = async () => {
     if (!text.trim()) return;
     setStatus('sending');
     try {
-      const res = await fetch(`${API_URL}/api/public/feedback`, {
+            const res = await fetch(`${API_URL}/api/public/feedback/${shopId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, rating, name: name.trim() || null }),
@@ -31,6 +41,16 @@ export default function SubmitPage() {
     width: '100%', padding: 12, fontSize: 16, borderRadius: 8,
     border: '1px solid #bbb', boxSizing: 'border-box',
   };
+
+    if (invalid) {
+    return (
+      <div style={{ ...box, textAlign: 'center', paddingTop: 80 }}>
+        <h1>Lien invalide</h1>
+        <p>Ce formulaire n'existe pas.</p>
+      </div>
+    );
+  }
+        <h1>{shopName ? `Votre avis sur ${shopName}` : 'Votre avis nous intéresse'}</h1>
 
   if (status === 'done') {
     return (
