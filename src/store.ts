@@ -65,10 +65,50 @@ export function useFeedbackStore() {
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
-
+  
     // Toujours la dernière liste, même avant le prochain rendu React
   const listRef = useRef<FeedbackRecord[]>([]);
+    // Rafraîchissement : récupère les nouveaux avis reçus par le formulaire (toutes les 30 s)
+  useEffect(() => {
+    if (!isLoaded) return;
+    const t = setInterval(async () => {
+      try {
+        const remote = await api.listFeedback();
+        const known = new Set(listRef.current.map(i => i.id));
+        const fresh = remote.filter(r => !known.has(r.id));
+        if (fresh.length) saveFeedbackList(prev => [...fresh, ...prev]);
+      } catch { /* backend momentanément injoignable */ }
+    }, 30000);
+    return () => clearInterval(t);
+  }, [isLoaded]);
 
+  // Analyse automatique des avis du formulaire public (encore "non analysés")
+  const analyzingRef = useRef(false);
+  useEffect(() => {
+    if (!isLoaded || analyzingRef.current) return;
+    const pending = feedbackList.filter(
+      f => f.source === 'QR Form' && f.sentimentReasoning?.startsWith('Reçu via le formulaire public')
+    );
+    if (pending.length === 0) return;
+    analyzingRef.current = true;
+    (async () => {
+      for (const item of pending) {
+        try {
+          const res = await analyzeTextLocally(item.transcription, llmKeysOf(settings));
+          updateFeedback(item.id, {
+            ...res,
+            transcription: item.transcription,
+            rating: item.rating ?? res.rating,   // garde la note donnée par le client
+            source: 'QR Form',
+            respondent: item.respondent,
+          });
+        } catch (e) {
+          console.error('Analyse auto échouée pour', item.id, e);
+        }
+      }
+      analyzingRef.current = false;
+    })();
+  }, [isLoaded, feedbackList, settings]);
   useEffect(() => {
     (async () => {
       try {
