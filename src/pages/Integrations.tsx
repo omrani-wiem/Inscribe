@@ -22,7 +22,7 @@ export default function Integrations({
   emailJsConfig,
   saveEmailJsConfig,
 }: IntegrationsProps) {
-  const [qrUrl, setQrUrl] = useState("https://inkscribe.ai/submit");
+  const [qrUrl, setQrUrl] = useState(`${window.location.origin}/submit`);
   const [qrPreview, setQrPreview] = useState("");
   const [digestStatus, setDigestStatus] = useState("");
   const [importStatus, setImportStatus] = useState("");

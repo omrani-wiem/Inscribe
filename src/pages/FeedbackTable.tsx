@@ -73,7 +73,7 @@ function TypewriterText({
   );
 }
 /* ── Word impact highlighting (calculé par le modèle, toutes langues) ── */
-const IMPACT_THRESHOLD = 0.3;
+const IMPACT_THRESHOLD = 0.8;
 
 function renderHighlightedText(tokens: WordImpact[]): React.ReactNode {
   return tokens.map((t, i) => {
@@ -113,7 +113,7 @@ interface FeedbackTableProps {
   // New actions
   addTag: (id: string, tag: string) => void;
   removeTag: (id: string, tag: string) => void;
-  reAnalyzeFeedback: (id: string) => void;
+  reAnalyzeFeedback: (id: string) => Promise<void>;
   generateAutoReply: (id: string) => Promise<string | null>;
 }
 
@@ -155,7 +155,8 @@ export default function FeedbackTable({
   const [replyError, setReplyError] = useState<string | null>(null);
   const tagInputRef = useRef<any>(null);
   const [isGeneratingReply, setIsGeneratingReply] = useState(false);
-  const [isReAnalyzing, setIsReAnalyzing] = useState(false);
+    const [isReAnalyzing, setIsReAnalyzing] = useState(false);
+  const [reAnalyzeError, setReAnalyzeError] = useState<string | null>(null);
 
   // Editing state for inspection dialog
   const [editTranscription, setEditTranscription] = useState('');
@@ -190,6 +191,22 @@ export default function FeedbackTable({
   useEffect(() => {
     if (!selectedFeedback) { setWordImpacts(null); return; }
     const text = editTranscription || selectedFeedback.transcription;
+    const llmKw = selectedFeedback.keywords;
+    if (llmKw) {
+      // Mots-clés choisis par le LLM : aucun calcul local
+      const pos = new Set(llmKw.positive);
+      const neg = new Set(llmKw.negative);
+      setWordImpacts(
+        text.split(/(\s+|[.,!?;:()"«»…])/).filter(Boolean).map(token => {
+          const isWord = /^[\p{L}\p{N}'’-]+$/u.test(token);
+          const w = token.toLowerCase();
+          return { token, isWord, weight: isWord ? (pos.has(w) ? 1 : neg.has(w) ? -1 : 0) : 0 };
+        })
+      );
+      setImpactsLoading(false);
+      setImpactsError(false);
+      return;
+    }
     let cancelled = false;
     setImpactsLoading(true);
     setImpactsError(false);
@@ -206,7 +223,7 @@ export default function FeedbackTable({
       }
     }, 600);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [selectedFeedback?.id, editTranscription]);
+  }, [selectedFeedback?.id, selectedFeedback?.keywords, editTranscription]);
 
   // Même structure qu'avant pour le panneau « Keywords Found », mais calculée par le modèle
   const keywordAnalysis = useMemo(() => {
@@ -508,8 +525,12 @@ export default function FeedbackTable({
                 if (window.confirm(`Re-analyze the ${selectedIds.length} selected items using the current Vision AI provider?`)) {
                   for (const id of selectedIds) {
                     await reAnalyzeFeedback(id);
+                  }                  let failed = 0;
+                  for (const id of selectedIds) {
+                    try { await reAnalyzeFeedback(id); } catch { failed++; }
                   }
-                  alert('Bulk re-analysis complete.');
+                  alert(failed ? `Terminé : ${failed} échec(s) sur ${selectedIds.length}. Voir la console.` : 'Bulk re-analysis complete.');
+                  setReAnalyzeError(null);
                   setSelectedIds([]);
                 }
               }}>
@@ -887,28 +908,17 @@ export default function FeedbackTable({
                         </div>
                       )}
 
-                      {/* Keyword-based reasoning */}
+                                           {/* Résumé aligné sur le badge de sentiment */}
                       {(() => {
                         const posCount = keywordAnalysis.positive.length;
                         const negCount = keywordAnalysis.negative.length;
-                        const total = posCount + negCount;
-                        if (total === 0) return null;
-                        const ratio = posCount / total;
-                        let derivedSentiment: string;
-                        let emoji: string;
-                        if (ratio > 0.6) {
-                          derivedSentiment = 'Positive';
-                          emoji = '😊';
-                        } else if (ratio < 0.4) {
-                          derivedSentiment = 'Negative';
-                          emoji = '😞';
-                        } else {
-                          derivedSentiment = 'Mixed';
-                          emoji = '😐';
-                        }
+                        if (posCount + negCount === 0) return null;
+                        const emoji = editSentiment === 'positive' ? '😊' : editSentiment === 'negative' ? '😞' : '😐';
+                        const label = editSentiment === 'positive' ? 'Positive' : editSentiment === 'negative' ? 'Negative' : 'Neutral';
                         return (
                           <div className="fb-kw-reasoning">
-                            {emoji} <strong>{posCount} positive</strong>{negCount > 0 && <> · <strong>{negCount} negative</strong></>} keywords → overall leans <strong>{derivedSentiment}</strong>
+                            {emoji} <strong>{posCount} positive</strong> · <strong>{negCount} negative</strong> keywords. Overall sentiment: <strong>{label}</strong>
+                            {!selectedFeedback.keywords && <> (approximate: local model, no LLM keywords)</>}
                           </div>
                         );
                       })()}
@@ -1116,6 +1126,12 @@ export default function FeedbackTable({
                   )}
                 </div>
 
+                {reAnalyzeError && (
+                  <p className="md-typescale-body-small" style={{ margin: '16px 0 0', color: 'var(--sentiment-negative)' }}>
+                    {reAnalyzeError}
+                  </p>
+                )}
+
                 {/* Action buttons */}
                 <div className="fb-modal-actions" style={{ marginTop: '24px' }}>
                   <div style={{ display: 'flex', gap: '8px' }}>
@@ -1130,7 +1146,12 @@ export default function FeedbackTable({
                       disabled={isReAnalyzing}
                       onClick={async () => {
                         setIsReAnalyzing(true);
-                        await reAnalyzeFeedback(selectedFeedback.id);
+                        setReAnalyzeError(null);
+                        try {
+                          await reAnalyzeFeedback(selectedFeedback.id);
+                        } catch (err: any) {
+                          setReAnalyzeError(err?.message || 'Échec de la ré-analyse.');
+                        }
                         // Refresh display values
                         const updated = data.find(f => f.id === selectedFeedback.id);
                         if (updated) {

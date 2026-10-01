@@ -1,24 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { api } from './api';
 import { FeedbackRecord, QueueItem, AppSettings } from './types';
 
-// Réessaie automatiquement les erreurs SERVEUR temporaires (429 rate-limit, 5xx, réseau).
-// Ne réessaie jamais les erreurs définitives (400, 401, 403, 404) : elles ne se
-// résoudront pas en retentant, et gaspilleraient du temps + du quota.
+let onRetry: ((msg: string) => void) | null = null;
+
+
 async function fetchWithRetry(url: string, options: RequestInit, maxRetries = 2): Promise<Response> {
+  const TIMEOUT_MS = 60000; // une requête ne peut plus rester bloquée
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     let response: Response;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     try {
-      response = await fetchWithRetry(url, options);
+      response = await fetch(url, { ...options, signal: controller.signal });
     } catch (networkErr) {
+      clearTimeout(timer);
       if (attempt === maxRetries) throw networkErr;
-      await new Promise(r => setTimeout(r, 1000 * 2 ** attempt));
+      console.warn(`Réseau/timeout, tentative ${attempt + 1}/${maxRetries}`, networkErr);
+      onRetry?.(`Connexion interrompue, nouvel essai ${attempt + 1}/${maxRetries}…`);
+      await new Promise(r => setTimeout(r, 2000 * 2 ** attempt));
       continue;
     }
+    clearTimeout(timer);
     const isRetryable = response.status === 429 || response.status >= 500;
     if (response.ok || !isRetryable || attempt === maxRetries) {
       return response;
     }
-    await new Promise(r => setTimeout(r, 2000 * 2 ** attempt)); // 2s, 4s, 8s, 16s…
+    onRetry?.(`Service surchargé (HTTP ${response.status}), nouvel essai ${attempt + 1}/${maxRetries}…`);
+    const retryAfter = Number(response.headers.get('retry-after'));
+    const waitMs = retryAfter > 0 ? Math.min(retryAfter * 1000, 60000) : 2000 * 2 ** attempt;
+    console.warn(`HTTP ${response.status} sur ${new URL(url).host}, tentative ${attempt + 1}/${maxRetries}, attente ${waitMs} ms`);
+    await new Promise(r => setTimeout(r, waitMs));
   }
   throw new Error('unreachable');
 }
@@ -54,50 +66,40 @@ export function useFeedbackStore() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load from local storage on mount
-  useEffect(() => {
-  // Plus de suppression : on charge toujours les données existantes.
-  // (Le reset de v3 ne servait qu'à purger les anciennes données de démo.)
-  localStorage.setItem(STORAGE_KEY_VERSION, String(CURRENT_VERSION));
-
-  const savedFeedback = localStorage.getItem(STORAGE_KEY_FEEDBACK);
-  if (savedFeedback) {
-    try {
-      setFeedbackList(JSON.parse(savedFeedback));
-    } catch (e) {
-      console.error('Error parsing feedback list from localStorage', e);
-    }
-  }
-
-    const savedSettings = localStorage.getItem(STORAGE_KEY_SETTINGS);
-  if (savedSettings) {
-    try {
-      const parsed = { ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) };
-      setSettings(parsed);
-      if (parsed.darkMode) document.documentElement.classList.add('dark');
-    } catch (e) {
-      console.error('Error parsing settings from localStorage', e);
-    }
-  }
-
-  setIsLoaded(true);
-}, []);
+    // Toujours la dernière liste, même avant le prochain rendu React
+  const listRef = useRef<FeedbackRecord[]>([]);
 
   useEffect(() => {
-  if (!isLoaded) return;
-  try {
-    localStorage.setItem(STORAGE_KEY_FEEDBACK, JSON.stringify(feedbackList));
-  } catch (e) {
-    console.warn('localStorage plein, sauvegarde sans les images', e);
-    try {
-      const light = feedbackList.map(({ scannedImage, ...rest }) => rest);
-      localStorage.setItem(STORAGE_KEY_FEEDBACK, JSON.stringify(light));
-    } catch (e2) {
-      console.error('Sauvegarde impossible', e2);
-    }
-  }
-}, [feedbackList, isLoaded]);
+    (async () => {
+      try {
+        let list = await api.listFeedback();
 
+        // Migration unique : anciens avis du navigateur -> base de données
+        const old = localStorage.getItem(STORAGE_KEY_FEEDBACK);
+        if (list.length === 0 && old && !localStorage.getItem('feedback_migrated')) {
+          const oldItems: FeedbackRecord[] = JSON.parse(old);
+          for (const it of oldItems) await api.createFeedback(it);
+          localStorage.setItem('feedback_migrated', '1');
+          list = await api.listFeedback();
+        }
+        saveFeedbackList(list);
+
+        let remote = await api.getSettings();
+        if (Object.keys(remote).length === 0) {
+          const oldS = localStorage.getItem(STORAGE_KEY_SETTINGS);
+          if (oldS) {
+            remote = JSON.parse(oldS);
+            await api.saveSettings({ ...DEFAULT_SETTINGS, ...remote });
+          }
+        }
+        setSettings({ ...DEFAULT_SETTINGS, ...remote } as AppSettings);
+      } catch (e) {
+        console.error('Backend injoignable. Est-il lancé sur le port 8080 ?', e);
+      } finally {
+        setIsLoaded(true);
+      }
+    })();
+  }, []);
   const saveFeedbackList = (updater: FeedbackRecord[] | ((prev: FeedbackRecord[]) => FeedbackRecord[])) => {
     setFeedbackList(prev => (typeof updater === 'function' ? updater(prev) : updater));
   };
@@ -111,15 +113,13 @@ export function useFeedbackStore() {
       ocrSpaceApiKey: (input.ocrSpaceApiKey ?? '').trim(),
     };
     setSettings(newSettings);
-    try {
-      localStorage.setItem(STORAGE_KEY_SETTINGS, JSON.stringify(newSettings));
-    } catch (e) {
-      console.error('Impossible de sauvegarder les réglages', e);
-    }
+        api.saveSettings(newSettings).catch(e => console.error('Impossible de sauvegarder les réglages', e));
   };
 
-  const clearAllData = () => {
+   const clearAllData = () => {
+    const ids = listRef.current.map(i => i.id);
     saveFeedbackList([]);
+    Promise.all(ids.map(id => api.deleteFeedback(id))).catch(console.error);
   };
 
   // Sample test data — only loaded on explicit user action
@@ -224,28 +224,37 @@ export function useFeedbackStore() {
     }
   ];
 
-  const loadSampleData = () => {
+   const loadSampleData = () => {
+    const oldIds = listRef.current.map(i => i.id);
     saveFeedbackList(SAMPLE_TEST_DATA);
+    Promise.all(oldIds.map(id => api.deleteFeedback(id)))
+      .then(() => Promise.all(SAMPLE_TEST_DATA.map(r => api.createFeedback(r))))
+      .catch(console.error);
   };
 
-    const addFeedback = (item: Omit<FeedbackRecord, 'id' | 'timestamp'>): string => {
+     const addFeedback = (item: Omit<FeedbackRecord, 'id' | 'timestamp'>): string => {
     const id = `FB-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const newRecord: FeedbackRecord = { ...item, id, timestamp: new Date().toISOString() };
     saveFeedbackList(prev => [newRecord, ...prev]);
+    api.createFeedback(newRecord).catch(e => console.error('Sauvegarde de l\'avis échouée', e));
     return id;
-}
+  };
 
   const updateFeedback = (id: string, updatedFields: Partial<FeedbackRecord>) => {
     saveFeedbackList(prev => prev.map(item => (item.id === id ? { ...item, ...updatedFields } : item)));
+    const updated = listRef.current.find(i => i.id === id);
+    if (updated) api.updateFeedback(updated).catch(e => console.error('Mise à jour échouée', e));
   };
 
   const deleteFeedback = (id: string) => {
     saveFeedbackList(prev => prev.filter(item => item.id !== id));
+    api.deleteFeedback(id).catch(console.error);
   };
 
   const deleteMultipleFeedback = (ids: string[]) => {
     const idSet = new Set(ids);
     saveFeedbackList(prev => prev.filter(item => !idSet.has(item.id)));
+    Promise.all(ids.map(id => api.deleteFeedback(id))).catch(console.error);
   };
 
   // Queue Management
@@ -278,7 +287,7 @@ export function useFeedbackStore() {
 
   const retryItem = (id: string) =>
   setQueue(prev => prev.map(q =>
-    q.id === id ? { ...q, status: 'queued', progress: 0, error: undefined } : q
+    q.id === id ? { ...q, status: 'queued', progress: 0, error: undefined, note: undefined } : q
   ));
 
   // Run the batch analysis
@@ -296,6 +305,8 @@ export function useFeedbackStore() {
     for (const item of itemsToProcess) {
       try {
         setQueue(prev => prev.map(q => q.id === item.id ? { ...q, progress: 30 } : q));
+        onRetry = (msg: string) =>
+          setQueue(prev => prev.map(q => q.id === item.id ? { ...q, note: msg } : q));
 
         // Require a real API key — no mock fallback
         let analysisResult;
@@ -308,7 +319,7 @@ export function useFeedbackStore() {
           if (!settings.ocrSpaceApiKey) {
             throw new Error('No OCR.space API key configured. Go to Settings to add your key.');
           }
-          analysisResult = await callOCRSpaceAPI(item.objectUrl, settings.ocrSpaceApiKey, settings.preprocessForOcr ?? true);
+          analysisResult = await callOCRSpaceAPI(item.objectUrl, settings.ocrSpaceApiKey, settings.preprocessForOcr ?? true, llmKeysOf(settings));
         } else if (settings.apiProvider === 'mistral') {
           if (!settings.mistralApiKey) {
             throw new Error('No Mistral API key configured. Go to Settings to add your key.');
@@ -358,24 +369,21 @@ export function useFeedbackStore() {
       }
     }
 
+    onRetry = null;
     setIsProcessing(false);
   };
 
   // ── Tag management ──────────────────────────────────────────────────────────
-  const addTag = (id: string, tag: string) => {
+    const addTag = (id: string, tag: string) => {
     const trimmed = tag.trim().toLowerCase();
     if (!trimmed) return;
-    saveFeedbackList(prev => prev.map(item => {
-      if (item.id !== id) return item;
-      const existing = item.tags ?? [];
-      return existing.includes(trimmed) ? item : { ...item, tags: [...existing, trimmed] };
-    }));
+    const existing = listRef.current.find(i => i.id === id)?.tags ?? [];
+    if (!existing.includes(trimmed)) updateFeedback(id, { tags: [...existing, trimmed] });
   };
 
   const removeTag = (id: string, tag: string) => {
-    saveFeedbackList(prev => prev.map(item =>
-      item.id === id ? { ...item, tags: (item.tags ?? []).filter(t => t !== tag) } : item
-    ));
+    const existing = listRef.current.find(i => i.id === id)?.tags ?? [];
+    updateFeedback(id, { tags: existing.filter(t => t !== tag) });
   };
 
   // ── Re-analyze an existing record ───────────────────────────────────────────
@@ -409,19 +417,32 @@ export function useFeedbackStore() {
         };
       } else {
         // Fall back to local ML analysis
-        result = await analyzeTextLocally(item.transcription);
+        result = await analyzeTextLocally(item.transcription, llmKeysOf(settings));
       }
 
       if (result) {
+        let keywords = (result as any).keywords;
+        let themes = result.themes;
+        if (!keywords) {
+          // Chemins LLM : on demande thèmes + mots-clés dans un appel dédié
+          const ins = await extractInsightsAuto(item.transcription, llmKeysOf(settings));
+          keywords = ins.keywords;
+          if (ins.themes.length) themes = ins.themes;
+          if (ins.error) console.warn('Thèmes/mots-clés indisponibles :', ins.error);
+        }
         updateFeedback(id, {
           ...result,
-          source: (result.source ?? 'Re-analyzed') + ` (re-analyzed)`,
+          transcription: item.transcription,
+          themes,
+          keywords,
+          source: result.source ?? 'Re-analyzed',
           reviewedAndEdited: false,
           needsReview: (result as any).confidence === 'low',
         });
       }
     } catch (err: any) {
       console.error('Re-analyze failed for', id, err);
+      throw err; // l'interface affiche maintenant l'erreur
     }
   };
 
@@ -674,6 +695,27 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
   };
 }
 
+// Helper // Nettoie les mots-clés renvoyés par le LLM : un mot par entrée, présent dans le texte
+const KW_SKIP = new Set(['ne','pas','de','du','la','le','les','un','une','des','et','en','au','qui','que','qu','se','sa','son','the','not','was','is','of','to']);
+
+function toKeywordList(a: unknown, text: string): string[] {
+  if (!Array.isArray(a)) return [];
+   const lowerText = text.toLowerCase();
+  const out = new Set<string>();
+  for (const x of a) {
+    String(x).toLowerCase().split(/[^\p{L}\p{N}'’-]+/u).forEach(w => {
+      if (w.length >= 3 && !KW_SKIP.has(w) && lowerText.includes(w)) out.add(w);
+    });
+  }
+  return Array.from(out).slice(0, 8);
+}
+
+function buildKeywords(parsed: any, text: string): { positive: string[]; negative: string[] } | undefined {
+  // Si le modèle n'a renvoyé aucune des deux listes, on laisse le secours local s'activer
+  if (!Array.isArray(parsed.positive) && !Array.isArray(parsed.negative)) return undefined;
+  return { positive: toKeywordList(parsed.positive, text), negative: toKeywordList(parsed.negative, text) };
+}
+
 // Helper to map UI model names to valid Gemini API model names
 function mapGeminiModel(modelName: string): string {
   const name = modelName ? modelName.trim() : '';
@@ -718,8 +760,16 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
   "rating": number|null,
   "summary": "string",
   "confidence": "high|medium|low",
-  "sentimentReasoning": "string"
-}`;
+  "sentimentReasoning": "string",
+  "positive": ["string"],
+  "negative": ["string"]
+}
+
+Additional rules:
+- Write "themes" in the SAME language as the transcription (French text -> French themes).
+- "positive" and "negative": SINGLE words (one word per entry, never a phrase) copied EXACTLY as written in your transcription, that express a positive or negative judgment in context. Include strong intensifiers and negative verbs/adjectives/nouns (e.g. "extrêmement", "déçu", "casse", "absence").
+- Never put product names, brand names or neutral nouns/verbs in these two lists. Take negation and comparison into account.
+- Maximum 8 words per list. Empty lists are allowed.`;
 
   const resolvedModel = mapGeminiModel(modelName);
   const response = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${resolvedModel}:generateContent`, {
@@ -773,6 +823,7 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
     summary: parsed.summary || '',
     confidence: parsed.confidence || 'high',
     needsReview: parsed.confidence === 'low',
+    keywords: buildKeywords(parsed, String(parsed.transcription || '')),
     source: "Gemini AI Analyzer"
   };
 }
@@ -783,7 +834,8 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
 async function callOCRSpaceAPI(
   objectUrl: string,
   apiKey: string,
-  preprocess: boolean = true
+  preprocess: boolean = true,
+  llm?: LlmKeys
 ): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
   let dataUri = await objectUrlToBase64DataUri(objectUrl);
 
@@ -831,9 +883,9 @@ async function callOCRSpaceAPI(
     throw new Error('OCR.space returned empty text — image may be unreadable.');
   }
 
-  return analyzeTextLocally(transcription);
+  return analyzeTextLocally(transcription, llm);
 }
-// ─── Mistral OCR helper ──────────────────────────────────────────────────────
+// ─── Mistral OCR helper──────────────────────────────────────────────────────
 // Uses Mistral OCR for text extraction, then Mistral Chat API for AI-powered
 // sentiment / theme / summary analysis. Falls back to local analysis on error.
 async function callMistralOCRAPI(objectUrl: string, apiKey: string): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
@@ -959,7 +1011,76 @@ Respond with ONLY a raw JSON object, no markdown fences, no commentary:
 // not a keyword list — it generalizes to words it has never seen literally.
 // Themes stay keyword-based (no lightweight general-purpose model for that yet),
 // so they're a best-effort hint, not a hard guarantee.
-async function analyzeTextLocally(transcription: string): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
+// ─── Extraction automatique des thèmes (LLM, aucune liste de mots) ───────────
+interface LlmKeys {
+  geminiApiKey?: string; geminiModel?: string;
+  mistralApiKey?: string;
+  groqApiKey?: string; groqModel?: string;
+}
+
+function llmKeysOf(s: AppSettings): LlmKeys {
+  return {
+    geminiApiKey: s.geminiApiKey, geminiModel: s.geminiModel,
+    mistralApiKey: s.mistralApiKey,
+    groqApiKey: s.groqApiKey, groqModel: s.groqModel,
+  };
+}
+
+interface Insights {
+  themes: string[];
+  keywords?: { positive: string[]; negative: string[] };
+  error?: string;
+}
+
+async function extractInsightsAuto(text: string, k?: LlmKeys): Promise<Insights> {
+  if (!k) return { themes: [], error: 'aucune clé LLM fournie' };
+  const prompt = `Analyze this customer feedback. The text may contain OCR errors: infer the intended meaning.
+
+Return ONLY a JSON object with exactly these keys:
+- "themes": 1 to 5 short topics (1 to 3 words each), lowercase, in the SAME language as the text.
+- "positive": SINGLE words (one word per entry, never a phrase) copied EXACTLY as written in the text that express a positive judgment in context.
+- "negative": SINGLE words (one word per entry, never a phrase) copied EXACTLY as written in the text that express a negative judgment in context. Include strong intensifiers and negative verbs/adjectives/nouns (e.g. "extrêmement", "déçu", "casse", "absence").
+
+Rules for "positive" and "negative":
+- Only words that carry an opinion or emotion in context. Never product names, brand names, or neutral nouns/verbs.
+- Take negation and comparison into account (e.g. "a better quality brand" said about ANOTHER brand is a criticism of the reviewed product).
+- Maximum 8 words per list. Empty lists are allowed.
+
+Text: """${text.slice(0, 2000)}"""`;
+
+  const runners: Array<{ name: string; run: () => Promise<string> }> = [];
+  if (k.geminiApiKey) runners.push({ name: 'Gemini', run: () => callGeminiTextAPIRaw(prompt, k.geminiApiKey!, k.geminiModel ?? '') });
+  if (k.mistralApiKey) runners.push({ name: 'Mistral', run: () => callMistralTextAPIRaw(prompt, k.mistralApiKey!) });
+  if (k.groqApiKey) runners.push({ name: 'Groq', run: () => callGroqTextAPIRaw(prompt, k.groqApiKey!, k.groqModel ?? '') });
+  if (runners.length === 0) return { themes: [], error: 'aucune clé API texte configurée' };
+
+  const lowerText = text.toLowerCase();
+  const errors: string[] = [];
+  for (const r of runners) {
+    try {
+      const raw = await r.run();
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (!m) { errors.push(`${r.name} : réponse non JSON`); continue; }
+            console.log('Insights bruts', r.name, m[0]);
+      const obj = JSON.parse(m[0]);
+      const themes = Array.isArray(obj.themes)
+        ? obj.themes.map((x: unknown) => String(x).toLowerCase().trim()).filter(Boolean).slice(0, 5)
+        : [];
+      return {
+        themes,
+        keywords: {
+          positive: toKeywordList(obj.positive, text),
+          negative: toKeywordList(obj.negative, text),
+        },
+      };
+    } catch (e: any) {
+      errors.push(`${r.name} : ${e.message}`);
+    }
+  }
+  return { themes: [], error: errors.join(' | ').slice(0, 300) };
+}
+
+async function analyzeTextLocally(transcription: string, llm?: LlmKeys): Promise<Omit<FeedbackRecord, 'id' | 'timestamp'>> {
   const lower = transcription.toLowerCase();
   const words = lower.match(/[a-zà-ÿ']+/g) ?? [];
 
@@ -978,23 +1099,14 @@ async function analyzeTextLocally(transcription: string): Promise<Omit<FeedbackR
     sentimentReasoning = 'Local ML model unavailable — defaulted to neutral. Try again or switch provider in Settings.';
   }
 
-  // Theme extraction — whole-word match against known topic keywords (EN + FR)
-  const themeMap: Record<string, string[]> = {
-    'staff friendliness': ['friendly', 'rude', 'polite', 'staff', 'employee', 'team', 'gentil', 'gentille', 'impoli', 'personnel', 'equipe'],
-    'wait time': ['wait', 'waited', 'slow', 'quick', 'fast', 'long', 'attente', 'attendu', 'lent', 'lente', 'rapide'],
-    'food quality': ['food', 'coffee', 'cake', 'croissant', 'cold', 'hot', 'fresh', 'stale', 'delicious', 'tasty', 'nourriture', 'cafe', 'gateau', 'froid', 'chaud', 'frais', 'delicieux'],
-    'cleanliness': ['clean', 'dirty', 'bathroom', 'floor', 'table', 'propre', 'sale', 'toilettes', 'sol'],
-    'pricing': ['price', 'expensive', 'cheap', 'overpriced', 'cost', 'dollar', 'prix', 'cher', 'chere', 'couteux'],
-    'ambiance': ['cozy', 'noise', 'loud', 'music', 'atmosphere', 'layout', 'ambiance', 'bruit', 'musique', 'decoration'],
-    'wifi': ['wifi', 'internet', 'connection', 'connexion'],
-    'customer service': ['service', 'helped', 'helpful', 'ignored', 'cashier', 'aide', 'utile', 'caissier', 'caissiere'],
-  };
-  const wordSet = new Set(words);
-  const themes: string[] = [];
-  for (const [theme, keywords] of Object.entries(themeMap)) {
-    if (keywords.some(k => wordSet.has(k))) themes.push(theme);
+    // Thèmes : extraits automatiquement par le LLM si une clé est disponible
+  const insights = await extractInsightsAuto(transcription, llm);
+  const themes = insights.themes;
+  if (insights.error) {
+    console.warn('Thèmes/mots-clés indisponibles :', insights.error);
+        sentimentReasoning += ' (Mots-clés approximatifs : les services IA étaient indisponibles, utilisez Re-analyze plus tard.)';
   }
-
+  
   // Rating from digits — look for "X/5", "X stars", "X etoiles"
   let rating: number | null = null;
   const ratingMatch = lower.match(/(\d)\s*(?:\/\s*5|stars?|out of 5|etoiles?)/);
@@ -1020,6 +1132,7 @@ async function analyzeTextLocally(transcription: string): Promise<Omit<FeedbackR
     sentiment,
     sentimentReasoning,
     themes: themes.slice(0, 5),
+    keywords: insights.keywords,
     rating,
     summary,
     confidence,
@@ -1129,7 +1242,11 @@ async function callGeminiTextAPIRaw(prompt: string, apiKey: string, modelName: s
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
   });
-  if (!response.ok) throw new Error(`Gemini API error (${response.status})`);
+  if (!response.ok) {
+    let body = '';
+    try { body = (await response.text()).slice(0, 300); } catch { /* ignore */ }
+    throw new Error(`Gemini API error (${response.status}) ${body}`);
+  }
   const json = await response.json();
   return json.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ?? '';
 }
@@ -1147,7 +1264,11 @@ async function callMistralTextAPIRaw(prompt: string, apiKey: string): Promise<st
       messages: [{ role: 'user', content: prompt }]
     })
   });
-  if (!response.ok) throw new Error(`Mistral Chat API error (${response.status})`);
+  if (!response.ok) {
+    let body = '';
+    try { body = (await response.text()).slice(0, 300); } catch { /* ignore */ }
+    throw new Error(`Mistral Chat API error (${response.status}) ${body}`);
+  }
   const json = await response.json();
   return json.choices?.[0]?.message?.content?.trim() ?? '';
 }

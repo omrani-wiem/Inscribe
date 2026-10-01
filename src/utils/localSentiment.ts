@@ -58,7 +58,20 @@ export interface WordImpact {
 }
 
 const WORD_RE = /^[\p{L}\p{N}'’-]+$/u; // lettres Unicode : accents et arabe inclus
-const MAX_WORDS = 60; // limite pour garder un temps de calcul raisonnable
+const MAX_WORDS = 60;
+
+// Mots vides (FR + EN) : jamais analysés, ils ne portent pas de sentiment
+const STOP = new Set((
+  'le la les l un une des du de d et en à a au aux ce cet cette ces se sa son ses ma mon mes ta ton tes ' +
+  'je tu il elle on nous vous ils elles me te lui leur y ne n pas plus que qu qui quoi dont où ou mais donc or ni car ' +
+  'si pour par sur sous dans avec sans chez vers entre est sont été être ai as avons avez ont fait peux peut ' +
+  'the a an and or but of to in on at for with is are was were be been it its this that these those i you he she we they my your'
+).split(/\s+/));
+
+const isStop = (token: string) => {
+  const t = token.toLowerCase().replace(/['’].*$/, ''); // "n'y" -> "n", "m'indique" -> "m"
+  return STOP.has(t) || t.length < 2;
+}; // limite pour garder un temps de calcul raisonnable
 
 async function polarities(classifier: any, texts: string[]): Promise<number[]> {
   const out: number[] = [];
@@ -103,7 +116,7 @@ export async function explainSentiment(text: string): Promise<WordImpact[]> {
   const plan: Array<{ wordIdx: number; baseJob: number; job: number }> = [];
   let budget = MAX_WORDS;
   for (const seg of segments) {
-    const words = seg.filter(i => all[i].isWord);
+    const words = seg.filter(i => all[i].isWord && !isStop(all[i].token));
     if (words.length < 2 || budget <= 0) continue;
     const baseJob = jobs.push(clean(seg, -1)) - 1;
     for (const w of words) {

@@ -492,8 +492,22 @@ export default function Analyzer({
                 height: '48px'
               }}>
                 {item.status === 'reading' && (
-                  <div style={{ width: '100%' }}>
+                  <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                     <md-linear-progress value={item.progress / 100} style={{ width: '100%' }} />
+                    {item.note && (
+                      <span
+                        title={item.note}
+                        style={{
+                          color: 'var(--md-sys-color-on-surface-variant)',
+                          fontSize: '0.7rem',
+                          whiteSpace: 'nowrap',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis'
+                        }}
+                      >
+                        {item.note}
+                      </span>
+                    )}
                   </div>
                 )}
 

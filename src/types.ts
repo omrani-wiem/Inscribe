@@ -24,6 +24,7 @@ export interface FeedbackRecord {
   autoReplyDraft?: string;   // LLM-generated reply suggestion
   language?: string;         // detected language code, e.g. 'fr', 'ar'
   scannedImage?: string;     // base64 data URI of the compressed scanned image
+  keywords?: { positive: string[]; negative: string[] };
 }
 
 export interface QueueItem {
@@ -37,6 +38,7 @@ export interface QueueItem {
   error?: string;
   result?: Omit<FeedbackRecord, 'id' | 'timestamp'>;
   feedbackId?: string;
+  note?: string;
 }
 
 export interface EmailJsConfig {
