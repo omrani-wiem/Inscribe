@@ -11,4 +11,5 @@ public class AppSettingsEntity {
     @Id public Long id = 1L;
     @JdbcTypeCode(SqlTypes.JSON) @Column(columnDefinition = "jsonb")
     public Map<String, Object> data;
+    @Column(columnDefinition = "text") public String keysEnc;
 }

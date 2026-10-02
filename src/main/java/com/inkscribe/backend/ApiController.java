@@ -15,11 +15,15 @@ public class ApiController {
     private final FeedbackRepository feedbackRepo;
     private final SettingsRepository settingsRepo;
     private final UserRepository users;
+    private final KeyStore keyStore;
+    private final AiService ai;
 
-    public ApiController(FeedbackRepository f, SettingsRepository s, UserRepository u) {
+    public ApiController(FeedbackRepository f, SettingsRepository s, UserRepository u, KeyStore k, AiService ai) {
         this.feedbackRepo = f;
         this.settingsRepo = s;
         this.users = u;
+        this.keyStore = k;
+        this.ai = ai;
     }
 
     private static Long uid(Jwt jwt) { return Long.valueOf(jwt.getSubject()); }
@@ -97,13 +101,21 @@ public class ApiController {
         r.source = "QR Form";
         if (s.name() != null && !s.name().isBlank()) r.respondent = Map.of("name", s.name().trim());
         feedbackRepo.save(r);
+        ai.analyzeStored(owner.id, r.id); 
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
     // ---- Réglages du gérant connecté ----
-    @GetMapping("/settings")
+       @GetMapping("/settings")
     public Map<String, Object> getSettings(@AuthenticationPrincipal Jwt jwt) {
-        return settingsRepo.findById(uid(jwt)).map(e -> e.data).orElse(Map.of());
+        AppSettingsEntity e = settingsRepo.findById(uid(jwt)).orElse(null);
+        if (e == null) return Map.of();
+        // Migration : d'anciennes clés encore en clair dans le JSON sont chiffrées au passage
+        if (e.data != null && KeyStore.NAMES.stream().anyMatch(e.data::containsKey)) {
+            keyStore.absorb(e, e.data);
+            settingsRepo.save(e);
+        }
+        return keyStore.view(e);
     }
 
     @PutMapping("/settings")
@@ -114,7 +126,8 @@ public class ApiController {
             n.id = me;
             return n;
         });
-        e.data = data;
-        return settingsRepo.save(e).data;
+        keyStore.absorb(e, data);
+        settingsRepo.save(e);
+        return keyStore.view(e);
     }
 }

@@ -29,6 +29,7 @@ class AuthFlowTest {
 
     @Value("${local.server.port}") int port;
     @Autowired UserRepository users;
+    @Autowired SettingsRepository settingsRepo;
     @MockitoBean MailService mail;   // on intercepte les e-mails pour lire les codes
 
     private final HttpClient client = HttpClient.newHttpClient();
@@ -208,5 +209,20 @@ class AuthFlowTest {
         var ok = call("POST", "/api/auth/login/2fa", null, body + Totp.codeAt(secret, now + 30) + "\"}");
         assertEquals(200, ok.statusCode());
         assertNotNull(field(ok.body(), "token"));
+    }
+    @Test
+    void les_cles_api_sont_chiffrees_et_jamais_renvoyees() throws Exception {
+        String email = newEmail();
+        String token = field(verifiedAccount(email), "token");
+        call("PUT", "/api/settings", token, "{\"geminiApiKey\":\"cle-secrete-123\",\"darkMode\":true}");
+
+        String body = call("GET", "/api/settings", token, null).body();
+        assertFalse(body.contains("cle-secrete-123"));   // jamais renvoyée au client
+        assertTrue(body.contains("********"));           // seulement un masque
+
+        AppSettingsEntity e = settingsRepo.findById(users.findByEmail(email).orElseThrow().id).orElseThrow();
+        assertTrue(e.keysEnc.startsWith("v1:"));         // chiffrée en base
+        assertFalse(e.keysEnc.contains("cle-secrete-123"));
+        assertFalse(e.data.containsKey("geminiApiKey")); // absente du JSON des réglages
     }
 }
