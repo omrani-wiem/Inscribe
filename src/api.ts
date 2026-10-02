@@ -2,10 +2,8 @@ import { FeedbackRecord } from './types';
 
 // Même machine que la page, port 8080 (permet aussi de tester depuis un téléphone)
 import.meta.env.DEV
-export const API_URL = import.meta.env.DEV
-  ? `http://${window.location.hostname}:8080`
-  : '';
-
+// Dev : backend sur le port 8080. Production : même adresse que la page (nginx fait le proxy).
+export const API_URL = import.meta.env.DEV ? `http://${window.location.hostname}:8080` : '';
 const TOKEN_KEY = 'inkscribe_token';
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
