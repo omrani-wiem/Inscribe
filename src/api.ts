@@ -1,7 +1,10 @@
 import { FeedbackRecord } from './types';
 
 // Même machine que la page, port 8080 (permet aussi de tester depuis un téléphone)
-export const API_URL = `http://${window.location.hostname}:8080`;
+import.meta.env.DEV
+export const API_URL = import.meta.env.DEV
+  ? `http://${window.location.hostname}:8080`
+  : '';
 
 const TOKEN_KEY = 'inkscribe_token';
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
