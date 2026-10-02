@@ -11,6 +11,10 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.*;
 import org.springframework.security.web.SecurityFilterChain;
@@ -30,7 +34,10 @@ public class SecurityConfig {
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                .requestMatchers(HttpMethod.POST, "/api/auth/register", "/api/auth/login").permitAll()
+                .requestMatchers(HttpMethod.POST,
+                        "/api/auth/register", "/api/auth/login", "/api/auth/login/2fa",
+                        "/api/auth/verify-email", "/api/auth/resend-code",
+                        "/api/auth/forgot", "/api/auth/reset").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/public/shop/*").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/public/feedback/*").permitAll()
                 .anyRequest().authenticated())
@@ -54,6 +61,13 @@ public class SecurityConfig {
 
     @Bean
     JwtDecoder jwtDecoder(@Value("${app.jwt.secret}") String secret) {
-        return NimbusJwtDecoder.withSecretKey(key(secret)).macAlgorithm(MacAlgorithm.HS256).build();
+        NimbusJwtDecoder decoder = NimbusJwtDecoder.withSecretKey(key(secret))
+                .macAlgorithm(MacAlgorithm.HS256).build();
+        // Le jeton temporaire de l'étape 2FA ne donne accès à aucune route protégée
+        OAuth2TokenValidator<Jwt> noMfa = t -> t.hasClaim("purpose")
+                ? OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token", "Jeton à usage limité", null))
+                : OAuth2TokenValidatorResult.success();
+        decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefault(), noMfa));
+        return decoder;
     }
 }

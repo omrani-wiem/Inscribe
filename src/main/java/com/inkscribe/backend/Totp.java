@@ -74,4 +74,13 @@ public final class Totp {
         } catch (Exception ignored) { }
         return -1;
     }
+
+        /** Code TOTP à un instant donné (utile pour les tests). */
+    public static String codeAt(String secret, long epochSeconds) {
+        try {
+            return String.format("%06d", code(decode(secret), epochSeconds / 30));
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
 }
