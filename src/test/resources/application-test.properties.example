@@ -1,0 +1,6 @@
+spring.datasource.url=jdbc:postgresql://localhost:5432/inkscribe_test
+spring.datasource.username=postgres
+spring.datasource.password=mot_de_passe
+spring.jpa.hibernate.ddl-auto=create-drop
+app.ratelimit.auth-max=100000
+app.ratelimit.public-max=100000
