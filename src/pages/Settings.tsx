@@ -8,7 +8,7 @@ import '@material/web/select/outlined-select.js';
 import '@material/web/select/select-option.js';
 import '@material/web/switch/switch.js';
 import '@material/web/icon/icon.js';
-
+import TwoFactorCard from '../components/TwoFactorCard';
 interface SettingsProps {
   settings: AppSettings;
   saveSettings: (settings: AppSettings) => void;

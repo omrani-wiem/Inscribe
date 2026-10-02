@@ -71,4 +71,8 @@ export const api = {
   twoFaSetup: () => post<{ secret: string; otpauthUri: string }>('/auth/2fa/setup'),
   twoFaEnable: (code: string) => post<void>('/auth/2fa/enable', { code }),
   twoFaDisable: (password: string, code: string) => post<void>('/auth/2fa/disable', { password, code }),
+
+  analyzeText: (text: string) => post<Omit<FeedbackRecord, 'id' | 'timestamp'>>('/ai/analyze-text', { text }),
+  analyzeImage: (image: string) => post<Omit<FeedbackRecord, 'id' | 'timestamp'>>('/ai/analyze-image', { image }),
+  reply: (text: string, sentiment: string) => post<{ reply: string }>('/ai/reply', { text, sentiment }),
 };
