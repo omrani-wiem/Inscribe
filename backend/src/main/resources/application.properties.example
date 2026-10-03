@@ -1,0 +1,7 @@
+spring.mail.host=smtp.gmail.com
+spring.mail.port=587
+spring.mail.username=tonadresse@gmail.com
+spring.mail.password=ton_mot_de_passe_application
+spring.mail.properties.mail.smtp.auth=true
+spring.mail.properties.mail.smtp.starttls.enable=true
+app.enc.key=${ENC_KEY:cle-de-chiffrement-de-dev-a-remplacer-32c}

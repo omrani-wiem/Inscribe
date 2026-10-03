@@ -1,0 +1,4 @@
+target
+.git
+.vscode
+src/test/resources/application-test.properties
