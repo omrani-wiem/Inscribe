@@ -10,17 +10,23 @@ import org.springframework.stereotype.Service;
 @Service
 public class MailService {
     private static final Logger log = LoggerFactory.getLogger(MailService.class);
+
     private final JavaMailSender sender;
+    private final boolean configured;
     private final String from;
 
-    public MailService(JavaMailSender sender, @Value("${spring.mail.username:}") String from) {
+    public MailService(JavaMailSender sender,
+                       @Value("${spring.mail.username:}") String user,
+                       @Value("${app.mail.from:}") String from,
+                       @Value("${app.mail.enabled:false}") boolean enabled) {
         this.sender = sender;
-        this.from = from;
+        this.configured = enabled && user != null && !user.isBlank();
+        this.from = (from == null || from.isBlank()) ? user : from;
     }
 
     public void send(String to, String subject, String body) {
-        if (from == null || from.isBlank()) {
-            // Mode développement : pas d'e-mail configuré, le code s'affiche ici
+        if (!configured) {
+            // Mode développement : le code s'affiche dans les logs
             log.warn("\n===== [MODE DEV, e-mail non configuré] =====\nÀ : {}\nSujet : {}\n{}\n=============================================", to, subject, body);
             return;
         }
