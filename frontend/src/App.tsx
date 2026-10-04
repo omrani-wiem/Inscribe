@@ -84,7 +84,7 @@ export default function App() {
       case 'analyzer':
         return { title: 'Handwriting OCR Analyzer', breadcrumbs: 'Analyzer' };
       case 'integrations':
-        return { title: 'Integrations & Import', breadcrumbs: 'Integrations' };
+           return { title: 'Collecte & Import', breadcrumbs: 'Collecte' };
       case 'settings':
         return { title: 'Dashboard Settings', breadcrumbs: 'Settings' };
       default:
@@ -176,15 +176,10 @@ export default function App() {
             updateFeedback={updateFeedback}
           />
         );
-      case 'integrations':
-        return (
-          <Integrations
-            feedbackList={feedbackList}
-            addFeedback={addFeedback}
-            emailJsConfig={settings.emailJsConfig}
-            saveEmailJsConfig={(cfg) => saveSettings({ ...settings, emailJsConfig: cfg })}
-          />
-        );
+        case 'integrations':
+          return <Integrations addFeedback={addFeedback} />;
+        
+      
       case 'settings':
         return (
           <Settings

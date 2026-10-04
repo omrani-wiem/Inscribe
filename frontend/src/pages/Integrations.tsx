@@ -1,276 +1,263 @@
 ﻿import React, { useState, useRef, useEffect } from "react";
 import { api } from "../api";
-import { FeedbackRecord, EmailJsConfig } from "../types";
+import { FeedbackRecord } from "../types";
 import { generateQRCodeURL, downloadQRCode } from "../utils/qrCode";
 import { importFromCSVFile } from "../utils/csvImport";
-import { sendDigestEmail } from "../utils/emailDigest";
 import "@material/web/button/filled-button.js";
 import "@material/web/button/outlined-button.js";
 import "@material/web/textfield/outlined-text-field.js";
 import "@material/web/icon/icon.js";
-import "@material/web/divider/divider.js";
 
 interface IntegrationsProps {
-  feedbackList: FeedbackRecord[];
   addFeedback: (item: Omit<FeedbackRecord, "id" | "timestamp">) => void;
-  emailJsConfig: EmailJsConfig;
-  saveEmailJsConfig: (cfg: EmailJsConfig) => void;
 }
 
-export default function Integrations({
-  feedbackList,
-  addFeedback,
-  emailJsConfig,
-  saveEmailJsConfig,
-}: IntegrationsProps) {
-   const [qrUrl, setQrUrl] = useState("");
+const CSV_TEMPLATE =
+  "transcription,rating\n" +
+  '"Service excellent, personnel adorable",5\n' +
+  '"Attente trop longue, café froid",2\n';
 
-  // Le lien du formulaire propre à ton compte
+export default function Integrations({ addFeedback }: IntegrationsProps) {
+  // ---- QR code ----
+  const [shopName, setShopName] = useState("");
+  const [qrUrl, setQrUrl] = useState("");
+  const [qrImg, setQrImg] = useState("");
+  const [copied, setCopied] = useState(false);
+
   useEffect(() => {
     api.me()
-      .then(m => setQrUrl(`${window.location.origin}/submit/${m.shopId}`))
+      .then(m => {
+        setShopName(m.shopName);
+        setQrUrl(`${window.location.origin}/submit/${m.shopId}`);
+      })
       .catch(() => {});
   }, []);
-  const [qrPreview, setQrPreview] = useState("");
-  const [digestStatus, setDigestStatus] = useState("");
-  const [importStatus, setImportStatus] = useState("");
-  const [formsPaste, setFormsPaste] = useState("");
-  const [formsStatus, setFormsStatus] = useState("");
-  const csvImportRef = useRef<HTMLInputElement>(null);
 
-  const generateQR = () => {
-    setQrPreview(generateQRCodeURL(qrUrl, 300));
-  };
+  useEffect(() => {
+    if (qrUrl) setQrImg(generateQRCodeURL(qrUrl, 300));
+  }, [qrUrl]);
 
-  const handleDownloadQR = async () => {
+  const copyLink = async () => {
     try {
-      await downloadQRCode(qrUrl);
-    } catch {
-      alert("Failed to download QR code.");
-    }
+      await navigator.clipboard.writeText(qrUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* presse-papiers indisponible */ }
   };
+
+  const printPoster = () => {
+    const w = window.open("", "_blank");
+    if (!w) return;
+    w.document.write(
+      `<html><head><title>Affiche</title><style>
+        body{font-family:system-ui,sans-serif;text-align:center;padding:60px}
+        h1{font-size:44px;margin-bottom:8px} h2{font-weight:400;margin-top:0}
+        img{width:420px;height:420px;margin:24px 0} p{font-size:22px}
+      </style></head><body>
+        <h1>Votre avis compte !</h1>
+        <h2>${shopName.replace(/</g, "&lt;")}</h2>
+        <img src="${qrImg}" onload="window.print()" />
+        <p>Scannez ce code avec votre téléphone<br/>pour nous laisser un avis en 30 secondes.</p>
+      </body></html>`
+    );
+    w.document.close();
+  };
+
+  // ---- Import CSV ----
+  const csvRef = useRef<HTMLInputElement>(null);
+  const [importStatus, setImportStatus] = useState("");
 
   const handleCSVImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
       const records = await importFromCSVFile(file);
-      records.forEach((r) => addFeedback(r));
-      setImportStatus(`Successfully imported ${records.length} records from CSV.`);
+      records.forEach(r => addFeedback(r));
+      setImportStatus(`${records.length} avis importés.`);
     } catch {
-      setImportStatus("Failed to parse CSV file.");
+      setImportStatus("Échec de la lecture du fichier. Vérifiez qu'il contient une colonne « transcription ».");
     }
     e.target.value = "";
   };
 
-  const handleFormsPaste = () => {
-    if (!formsPaste.trim()) return;
-    try {
-      const parsed = JSON.parse(formsPaste);
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      let count = 0;
-      items.forEach((item: any) => {
-        const transcription =
-          item.transcription || item.feedback || item.text || item.response || item.answer || "";
-        if (!transcription) return;
-        addFeedback({
-          transcription,
-          sentiment: ["positive", "neutral", "negative"].includes(item.sentiment) ? item.sentiment : "neutral",
-          themes: Array.isArray(item.themes) ? item.themes : [],
-          rating: typeof item.rating === "number" ? item.rating : null,
-          summary: item.summary || transcription.substring(0, 100),
-          confidence: "medium",
-          sentimentReasoning: "Imported from Forms JSON",
-          needsReview: true,
-          source: item.source || "Forms Import",
-        });
-        count++;
-      });
-      setFormsStatus(`Imported ${count} records from JSON. Records marked for review.`);
-      setFormsPaste("");
-    } catch {
-      setFormsStatus("Invalid JSON. Make sure to paste a valid JSON array.");
-    }
+  const downloadTemplate = () => {
+    const blob = new Blob(["\uFEFF" + CSV_TEMPLATE], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "modele-avis.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
-  const handleSendDigest = async () => {
-    setDigestStatus("Sending...");
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const weekly = feedbackList.filter((r) => new Date(r.timestamp).getTime() >= weekAgo);
+  // ---- Rapport hebdomadaire ----
+  const [digestOn, setDigestOn] = useState(false);
+  const [digestEmail, setDigestEmail] = useState("");
+  const [lastSent, setLastSent] = useState<string | null>(null);
+  const [digestMsg, setDigestMsg] = useState<{ text: string; error: boolean } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.getDigest()
+      .then(d => { setDigestOn(d.enabled); setDigestEmail(d.email); setLastSent(d.lastSentAt); })
+      .catch(() => {});
+  }, []);
+
+  const saveDigest = async () => {
+    setBusy(true);
     try {
-      await sendDigestEmail(emailJsConfig, weekly);
-      setDigestStatus("Digest sent successfully!");
-    } catch (err: any) {
-      setDigestStatus("Error: " + err.message);
+      const d = await api.saveDigest(digestOn, digestEmail);
+      setDigestEmail(d.email);
+      setDigestMsg({ text: digestOn ? "Enregistré. Rapport activé chaque lundi à 8h." : "Enregistré. Rapport désactivé.", error: false });
+    } catch (e: any) {
+      setDigestMsg({ text: e.message, error: true });
     }
+    setBusy(false);
   };
 
-  const card = {
+  const sendNow = async () => {
+    setBusy(true);
+    try {
+      await api.saveDigest(digestOn, digestEmail);
+      const d = await api.sendDigestNow();
+      setLastSent(d.lastSentAt);
+      setDigestMsg({ text: `Rapport envoyé à ${d.email}.`, error: false });
+    } catch (e: any) {
+      setDigestMsg({ text: e.message, error: true });
+    }
+    setBusy(false);
+  };
+
+  const card: React.CSSProperties = {
     border: "1px solid var(--md-sys-color-outline-variant)",
-    borderRadius: "16px",
+    borderRadius: 16,
     background: "var(--md-sys-color-surface)",
-    padding: "24px",
+    padding: 24,
     display: "flex",
-    flexDirection: "column" as const,
-    gap: "16px",
+    flexDirection: "column",
+    gap: 16,
   };
-  const sectionTitle = {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    marginBottom: "4px",
-  };
+  const title: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10 };
+  const muted: React.CSSProperties = { color: "var(--md-sys-color-on-surface-variant)", margin: 0 };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "24px", padding: "24px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24, padding: 24 }}>
 
-      {/* QR Code Generator */}
+      {/* 1. QR code */}
       <div className="m3-entrance-up m3-stagger-1" style={card}>
-        <div style={sectionTitle}>
+        <div style={title}>
           <md-icon style={{ color: "var(--md-sys-color-primary)" }}>qr_code_2</md-icon>
-          <h2 className="settings-title">QR Code Generator</h2>
+          <h2 className="settings-title">Votre QR code</h2>
         </div>
-        <p className="md-typescale-body-medium" style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          Generate a printable QR code linking to your feedback submission form or any URL. Customers can scan it to leave feedback instantly.
+        <p className="md-typescale-body-medium" style={muted}>
+          Affichez-le dans votre établissement. Vos clients le scannent, laissent leur avis sur un
+          formulaire à votre nom, et l'avis arrive ici, analysé automatiquement.
         </p>
-        <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", alignItems: "flex-end" }}>
-          <div style={{ flex: 1, minWidth: "260px" }}>
-            <md-outlined-text-field
-              label="URL to encode"
-              value={qrUrl}
-              onInput={(e: any) => setQrUrl(e.target.value)}
-              style={{ width: "100%" }}
-              placeholder="https://your-feedback-form.com"
-            />
-          </div>
-          <md-filled-button
-            onClick={generateQR}
-            style={{ "--md-filled-button-container-height": "56px" }}
-          >
-            <md-icon slot="icon">qr_code</md-icon>
-            Generate QR
-          </md-filled-button>
-        </div>
 
-        {qrPreview && (
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px", padding: "20px", background: "var(--md-sys-color-surface-container-low)", borderRadius: "12px" }}>
-            <img src={qrPreview} alt="QR Code" style={{ width: "220px", height: "220px", borderRadius: "8px", border: "1px solid var(--md-sys-color-outline-variant)" }} />
-            <p className="md-typescale-body-small" style={{ color: "var(--md-sys-color-on-surface-variant)", textAlign: "center" }}>
-              Scan to visit: <strong>{qrUrl}</strong>
-            </p>
-            <md-outlined-button onClick={handleDownloadQR}>
-              <md-icon slot="icon">download</md-icon>
-              Download QR PNG
-            </md-outlined-button>
+        {qrImg && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16, padding: 20,
+                        background: "var(--md-sys-color-surface-container-low)", borderRadius: 12 }}>
+            <img src={qrImg} alt="QR code du formulaire d'avis" width={220} height={220}
+                 style={{ borderRadius: 8, border: "1px solid var(--md-sys-color-outline-variant)" }} />
+            <code style={{ wordBreak: "break-all", textAlign: "center" }}>{qrUrl}</code>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
+              <md-outlined-button onClick={copyLink}>
+                <md-icon slot="icon">content_copy</md-icon>
+                {copied ? "Copié !" : "Copier le lien"}
+              </md-outlined-button>
+              <md-outlined-button onClick={() => downloadQRCode(qrUrl).catch(() => alert("Téléchargement impossible."))}>
+                <md-icon slot="icon">download</md-icon>
+                Télécharger l'image
+              </md-outlined-button>
+              <md-filled-button onClick={printPoster}>
+                <md-icon slot="icon">print</md-icon>
+                Imprimer l'affiche
+              </md-filled-button>
+            </div>
           </div>
         )}
+
+        <details>
+          <summary style={{ cursor: "pointer", color: "var(--md-sys-color-primary)" }}>
+            Avancé : encoder une autre adresse
+          </summary>
+          <div style={{ marginTop: 12 }}>
+            <md-outlined-text-field label="Adresse à encoder" value={qrUrl} autocomplete="off"
+              onInput={(e: any) => setQrUrl(e.target.value)} style={{ width: "100%" }} />
+          </div>
+        </details>
       </div>
 
-      {/* CSV Import */}
+      {/* 2. Import CSV */}
       <div className="m3-entrance-up m3-stagger-2" style={card}>
-        <div style={sectionTitle}>
+        <div style={title}>
           <md-icon style={{ color: "var(--md-sys-color-primary)" }}>upload_file</md-icon>
-          <h2 className="settings-title">CSV / Spreadsheet Import</h2>
+          <h2 className="settings-title">Importer des avis existants</h2>
         </div>
-        <p className="md-typescale-body-medium" style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          Bulk-import existing feedback from a CSV file. The file must have at least a <code>transcription</code> (or <code>feedback</code> / <code>text</code>) column. Optional columns: <code>sentiment</code>, <code>rating</code>, <code>themes</code>, <code>summary</code>, <code>tags</code>, <code>source</code>.
+        <p className="md-typescale-body-medium" style={muted}>
+          Vous avez déjà des avis dans Excel ou Google Sheets ? Enregistrez-les en <strong>CSV</strong> avec une
+          colonne <code>transcription</code> (le texte de l'avis) et, si vous voulez, une colonne <code>rating</code> (note de 1 à 5).
+          Si le fichier n'est lu que sur une colonne, choisissez « CSV UTF-8 » dans Excel.
         </p>
-        <input type="file" accept=".csv,text/csv" ref={csvImportRef} onChange={handleCSVImport} style={{ display: "none" }} />
-        <div style={{ display: "flex", gap: "12px" }}>
-          <md-filled-button onClick={() => csvImportRef.current?.click()}>
+        <input type="file" accept=".csv,text/csv" ref={csvRef} onChange={handleCSVImport} style={{ display: "none" }} />
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <md-filled-button onClick={() => csvRef.current?.click()}>
             <md-icon slot="icon">table_view</md-icon>
-            Choose CSV File
+            Choisir un fichier CSV
           </md-filled-button>
-        </div>
-        {importStatus && (
-          <p className="md-typescale-body-medium" style={{ color: importStatus.startsWith("Error") || importStatus.startsWith("Failed") ? "var(--sentiment-negative)" : "var(--sentiment-positive)", marginTop: "4px" }}>
-            {importStatus}
-          </p>
-        )}
-      </div>
-
-      {/* Google Forms / Typeform JSON Import */}
-      <div className="m3-entrance-up m3-stagger-3" style={card}>
-        <div style={sectionTitle}>
-          <md-icon style={{ color: "var(--md-sys-color-primary)" }}>integration_instructions</md-icon>
-          <h2 className="settings-title">Google Forms / Typeform Import</h2>
-        </div>
-        <p className="md-typescale-body-medium" style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          Export your form responses as JSON and paste them below. Each entry should have a <code>transcription</code>, <code>feedback</code>, <code>text</code>, or <code>response</code> field. All imported records will be flagged for review.
-        </p>
-        <textarea
-          value={formsPaste}
-          onChange={(e) => setFormsPaste(e.target.value)}
-          placeholder='Paste JSON here, e.g. [{"feedback": "Great service!", "rating": 5}, ...]'
-          style={{
-            width: "100%", minHeight: "120px", padding: "12px", borderRadius: "8px",
-            border: "1px solid var(--md-sys-color-outline)", background: "var(--md-sys-color-surface-container-low)",
-            color: "var(--md-sys-color-on-surface)", fontFamily: "monospace", fontSize: "0.85rem",
-            resize: "vertical", boxSizing: "border-box"
-          }}
-        />
-        <div style={{ display: "flex", gap: "12px" }}>
-          <md-filled-button onClick={handleFormsPaste} disabled={!formsPaste.trim()}>
-            <md-icon slot="icon">publish</md-icon>
-            Import JSON Records
-          </md-filled-button>
-        </div>
-        {formsStatus && (
-          <p className="md-typescale-body-medium" style={{ color: formsStatus.startsWith("Error") || formsStatus.startsWith("Invalid") ? "var(--sentiment-negative)" : "var(--sentiment-positive)" }}>
-            {formsStatus}
-          </p>
-        )}
-      </div>
-
-      {/* EmailJS Digest */}
-      <div className="m3-entrance-up m3-stagger-4" style={card}>
-        <div style={sectionTitle}>
-          <md-icon style={{ color: "var(--md-sys-color-primary)" }}>email</md-icon>
-          <h2 className="settings-title">Weekly Digest Email (via EmailJS)</h2>
-        </div>
-        <p className="md-typescale-body-medium" style={{ color: "var(--md-sys-color-on-surface-variant)" }}>
-          Send a summary of last week's feedback to any email address using <a href="https://www.emailjs.com" target="_blank" rel="noopener" style={{ color: "var(--md-sys-color-primary)" }}>EmailJS</a> (free — no backend required). Configure your EmailJS credentials below.
-        </p>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <md-outlined-text-field label="EmailJS Service ID" value={emailJsConfig.serviceId}
-              onInput={(e: any) => saveEmailJsConfig({ ...emailJsConfig, serviceId: e.target.value })}
-              placeholder="service_xxxxxxx" style={{ width: "100%" }} />
-            <md-outlined-text-field label="EmailJS Template ID" value={emailJsConfig.templateId}
-              onInput={(e: any) => saveEmailJsConfig({ ...emailJsConfig, templateId: e.target.value })}
-              placeholder="template_xxxxxxx" style={{ width: "100%" }} />
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-            <md-outlined-text-field label="EmailJS Public Key" type="password" value={emailJsConfig.publicKey}
-              onInput={(e: any) => saveEmailJsConfig({ ...emailJsConfig, publicKey: e.target.value })}
-              placeholder="Your public key" style={{ width: "100%" }} />
-            <md-outlined-text-field label="Recipient Email" type="email" value={emailJsConfig.recipientEmail}
-              onInput={(e: any) => saveEmailJsConfig({ ...emailJsConfig, recipientEmail: e.target.value })}
-              placeholder="manager@example.com" style={{ width: "100%" }} />
-          </div>
-        </div>
-
-        <div style={{ padding: "10px 14px", borderRadius: "8px", background: "var(--md-sys-color-surface-container-low)", border: "1px solid var(--md-sys-color-outline-variant)" }}>
-          <p className="md-typescale-body-small" style={{ margin: 0, color: "var(--md-sys-color-on-surface-variant)" }}>
-            📧 <strong>Template variables</strong> available: <code>{"{{total_count}}"}</code>, <code>{"{{positive_count}}"}</code>, <code>{"{{neutral_count}}"}</code>, <code>{"{{negative_count}}"}</code>, <code>{"{{negative_pct}}"}</code>, <code>{"{{top_themes}}"}</code>, <code>{"{{date_range}}"}</code>, <code>{"{{to_email}}"}</code>
-          </p>
-        </div>
-
-        <div style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
-          <md-filled-button onClick={handleSendDigest}>
-            <md-icon slot="icon">send</md-icon>
-            Send This Week's Digest
-          </md-filled-button>
-          <md-outlined-button onClick={() => window.open("https://www.emailjs.com", "_blank", "noopener")}>
-            <md-icon slot="icon">open_in_new</md-icon>
-            Set Up EmailJS
+          <md-outlined-button onClick={downloadTemplate}>
+            <md-icon slot="icon">download</md-icon>
+            Télécharger un modèle
           </md-outlined-button>
         </div>
-        {digestStatus && (
-          <p className="md-typescale-body-medium" style={{ color: digestStatus.startsWith("Error") ? "var(--sentiment-negative)" : "var(--sentiment-positive)" }}>
-            {digestStatus}
+        {importStatus && (
+          <p className="md-typescale-body-medium" style={{
+            margin: 0,
+            color: importStatus.startsWith("Échec") ? "var(--sentiment-negative)" : "var(--sentiment-positive)",
+          }}>{importStatus}</p>
+        )}
+      </div>
+
+      {/* 3. Rapport hebdomadaire */}
+      <div className="m3-entrance-up m3-stagger-3" style={card}>
+        <div style={title}>
+          <md-icon style={{ color: "var(--md-sys-color-primary)" }}>email</md-icon>
+          <h2 className="settings-title">Rapport hebdomadaire par e-mail</h2>
+        </div>
+        <p className="md-typescale-body-medium" style={muted}>
+          Chaque lundi à 8h, recevez un résumé de la semaine : nombre d'avis, répartition
+          positifs / neutres / négatifs, thèmes principaux et derniers avis négatifs.
+        </p>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+          <input type="checkbox" checked={digestOn} onChange={e => setDigestOn(e.target.checked)}
+                 style={{ width: 20, height: 20, accentColor: "var(--md-sys-color-primary)" }} />
+          <span className="md-typescale-body-large">Recevoir le rapport chaque lundi</span>
+        </label>
+
+        <md-outlined-text-field label="Adresse de réception" type="email" value={digestEmail}
+          autocomplete="off" onInput={(e: any) => setDigestEmail(e.target.value)} style={{ width: "100%" }} />
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <md-filled-button onClick={saveDigest} disabled={busy || undefined}>
+            <md-icon slot="icon">save</md-icon>
+            Enregistrer
+          </md-filled-button>
+          <md-outlined-button onClick={sendNow} disabled={busy || undefined}>
+            <md-icon slot="icon">send</md-icon>
+            Envoyer maintenant
+          </md-outlined-button>
+        </div>
+
+        {lastSent && (
+          <p className="md-typescale-body-small" style={muted}>
+            Dernier envoi : {new Date(lastSent).toLocaleString()}
           </p>
+        )}
+        {digestMsg && (
+          <p className="md-typescale-body-medium" style={{
+            margin: 0,
+            color: digestMsg.error ? "var(--sentiment-negative)" : "var(--sentiment-positive)",
+          }}>{digestMsg.text}</p>
         )}
       </div>
 
@@ -280,6 +267,7 @@ export default function Integrations({
           font-size: var(--md-sys-typescale-title-large-size);
           font-weight: var(--md-sys-typescale-title-large-weight);
           color: var(--md-sys-color-on-background);
+          margin: 0;
         }
         code {
           background: var(--md-sys-color-surface-container);

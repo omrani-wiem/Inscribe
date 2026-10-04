@@ -76,4 +76,13 @@ export const api = {
   analyzeText: (text: string) => post<Omit<FeedbackRecord, 'id' | 'timestamp'>>('/ai/analyze-text', { text }),
   analyzeImage: (image: string) => post<Omit<FeedbackRecord, 'id' | 'timestamp'>>('/ai/analyze-image', { image }),
   reply: (text: string, sentiment: string) => post<{ reply: string }>('/ai/reply', { text, sentiment }),
+
+    getDigest: () => request<{ enabled: boolean; email: string; lastSentAt: string | null }>('/digest'),
+  saveDigest: (enabled: boolean, email: string) =>
+    request<{ enabled: boolean; email: string; lastSentAt: string | null }>('/digest', {
+      method: 'PUT', body: JSON.stringify({ enabled, email }),
+    }),
+  sendDigestNow: () => post<{ enabled: boolean; email: string; lastSentAt: string | null }>('/digest/send'),
+
+  
 };
