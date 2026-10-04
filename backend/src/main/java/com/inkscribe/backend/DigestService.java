@@ -42,17 +42,17 @@ public class DigestService {
     public void send(AppUser u) {
         Instant now = Instant.now();
         Instant since = now.minus(7, ChronoUnit.DAYS);
-        List<FeedbackRecord> week = feedbackRepo.findByOwnerIdAndTimestampAfter(u.id, since);
+                List<DigestRow> week = feedbackRepo.digestRows(u.id, since);
 
-        long pos = week.stream().filter(f -> "positive".equals(f.sentiment)).count();
-        long neu = week.stream().filter(f -> "neutral".equals(f.sentiment)).count();
-        long neg = week.stream().filter(f -> "negative".equals(f.sentiment)).count();
-        long review = week.stream().filter(f -> f.needsReview).count();
+        long pos = week.stream().filter(f -> "positive".equals(f.getSentiment())).count();
+        long neu = week.stream().filter(f -> "neutral".equals(f.getSentiment())).count();
+        long neg = week.stream().filter(f -> "negative".equals(f.getSentiment())).count();
+        long review = week.stream().filter(f -> Boolean.TRUE.equals(f.getNeedsReview())).count();
         long pct = week.isEmpty() ? 0 : Math.round(100.0 * neg / week.size());
 
         String themes = week.stream()
-                .filter(f -> f.themes != null)
-                .flatMap(f -> f.themes.stream())
+                .filter(f -> f.getThemes() != null)
+                .flatMap(f -> f.getThemes().stream())
                 .collect(Collectors.groupingBy(t -> t, Collectors.counting()))
                 .entrySet().stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue().reversed())
@@ -61,13 +61,11 @@ public class DigestService {
                 .collect(Collectors.joining(", "));
 
         String negatives = week.stream()
-                .filter(f -> "negative".equals(f.sentiment))
-                .sorted(Comparator.comparing((FeedbackRecord f) -> f.timestamp).reversed())
+                .filter(f -> "negative".equals(f.getSentiment()))
+                .sorted(Comparator.comparing(DigestRow::getTimestamp).reversed())
                 .limit(3)
-                .map(f -> "  - " + shorten(f.transcription, 140))
-                .collect(Collectors.joining("\n"));
-
-        StringBuilder b = new StringBuilder();
+                .map(f -> "  - " + shorten(f.getTranscription(), 140))
+                .collect(Collectors.joining("\n"));       StringBuilder b = new StringBuilder();
         b.append("Résumé de la semaine pour ").append(u.shopName)
          .append(" (du ").append(DAY.format(since)).append(" au ").append(DAY.format(now)).append(")\n\n")
          .append("Total : ").append(week.size()).append(" avis\n")
