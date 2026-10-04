@@ -1,6 +1,6 @@
 import { FeedbackRecord } from './types';
 
-// Même machine que la page, port 8080 (permet aussi de tester depuis un téléphone)
+
 import.meta.env.DEV
 // Dev : backend sur le port 8080. Production : même adresse que la page (nginx fait le proxy).
 export const API_URL = import.meta.env.DEV ? `http://${window.location.hostname}:8080` : '';

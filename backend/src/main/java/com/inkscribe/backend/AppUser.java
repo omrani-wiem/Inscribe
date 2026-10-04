@@ -36,4 +36,10 @@ public class AppUser {
     public boolean totpEnabled = false;
     @Column(columnDefinition = "bigint default 0 not null")
     public long lastTotpStep = 0;   // empêche de réutiliser un même code
+
+        // Rapport hebdomadaire
+    @Column(columnDefinition = "boolean default false not null")
+    public boolean digestEnabled = false;
+    public String digestEmail;
+    public Instant lastDigestAt;
 }

@@ -15,4 +15,6 @@ public interface FeedbackRepository extends JpaRepository<FeedbackRecord, String
     @Transactional
     @Query("update FeedbackRecord f set f.ownerId = :id where f.ownerId is null")
     int claimOrphans(@Param("id") Long id);
+
+        List<FeedbackRecord> findByOwnerIdAndTimestampAfter(Long ownerId, java.time.Instant since);
 }

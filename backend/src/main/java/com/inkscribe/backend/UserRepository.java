@@ -7,4 +7,7 @@ public interface UserRepository extends JpaRepository<AppUser, Long> {
     Optional<AppUser> findByEmail(String email);
     Optional<AppUser> findByShopId(String shopId);
     boolean existsByEmail(String email);
+
+    // Rapport hebdomadaire
+    java.util.List<AppUser> findByDigestEnabledTrue();
 }

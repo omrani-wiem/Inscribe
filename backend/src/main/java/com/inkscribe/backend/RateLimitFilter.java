@@ -42,6 +42,8 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 allowed = allow("pub:" + req.getRemoteAddr(), publicMax, PUBLIC_WINDOW);
             else if (p.startsWith("/api/ai/"))
                 allowed = allow("ai:" + req.getRemoteAddr(), 60, AUTH_WINDOW);
+            else if (p.startsWith("/api/digest/"))
+                allowed = allow("digest:" + req.getRemoteAddr(), 10, AUTH_WINDOW);
             if (!allowed) {
                 res.setStatus(429);
                 res.setContentType("application/json;charset=UTF-8");

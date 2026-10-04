@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import static org.mockito.ArgumentMatchers.contains;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -224,5 +225,17 @@ class AuthFlowTest {
         assertTrue(e.keysEnc.startsWith("v1:"));         // chiffrée en base
         assertFalse(e.keysEnc.contains("cle-secrete-123"));
         assertFalse(e.data.containsKey("geminiApiKey")); // absente du JSON des réglages
+    }
+
+        @Test
+    void le_rapport_hebdomadaire_est_envoye_a_l_adresse_choisie() throws Exception {
+        String token = field(verifiedAccount(newEmail()), "token");
+        call("POST", "/api/feedback", token, feedbackJson("D-" + UUID.randomUUID(), "Super service"));
+
+        assertEquals(400, call("PUT", "/api/digest", token, "{\"enabled\":true,\"email\":\"pas-un-email\"}").statusCode());
+        assertEquals(200, call("PUT", "/api/digest", token, "{\"enabled\":true,\"email\":\"manager@test.local\"}").statusCode());
+        assertEquals(200, call("POST", "/api/digest/send", token, null).statusCode());
+
+        verify(mail).send(eq("manager@test.local"), anyString(), contains("Total : 1 avis"));
     }
 }
